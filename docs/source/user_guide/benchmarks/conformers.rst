@@ -40,3 +40,105 @@ Reference data:
 * Same as input data
 * :math:`PNO-LCCSD(T)-F12/ AVQZ` level of theory: a local, explicitly
   correlated coupled cluster method.
+
+
+Folmsbee
+========
+
+Summary
+-------
+
+Performance in predicting relative conformer energies for a set of drug-like
+molecules. Each molecule has a small set of conformers (3-10 per molecule)
+whose energies are ranked relative to the lowest-energy conformer. Reference
+data from DLPNO-CCSD(T) calculations.
+
+Metrics
+-------
+
+For each molecule, the relative energy of every conformer is taken with respect
+to the lowest-energy reference conformer (set to zero). The predicted energies
+are aligned to the same reference conformer and converted to kcal/mol before
+being compared against the :math:`DLPNO-CCSD(T)` reference.
+
+1. MAE
+
+The mean absolute error between predicted and reference relative energies,
+averaged over all molecules.
+
+2. Conformer Score
+
+For each molecule, the per-molecule MAE and RMSE are passed
+through a soft threshold (MAE at 0.5 kcal/mol, RMSE at 1.5 kcal/mol) to give a
+value between 0 and 1, and these are averaged across all molecules. Molecules
+for which the model fails to produce an energy profile score 0.
+
+Computational cost
+------------------
+
+Medium: Minutes on GPU. Minutes to tens of minutes on CPU.
+
+Data availability
+-----------------
+
+Input structures:
+
+* Assessing conformer energies using electronic structure and machine learning
+  methods
+  Dakota Folmsbee, Geoffrey Hutchison
+  International Journal of Quantum Chemistry 2020 121 (1) e26381
+  DOI: 10.1002/qua.26381
+
+Reference data:
+
+* Same as input data
+* :math:`DLPNO-CCSD(T)` level of theory: a local coupled-cluster method.
+
+
+TorsionNet500CCSDT
+===================
+
+Summary
+-------
+
+Performance in predicting torsional energy profiles for 500 diverse organic
+molecular fragments. Reference data from DLPNO-CCSD(T)/CBS calculations.
+
+Metrics
+-------
+
+1. RMSE of relative torsional energy profile
+2. MAE of relative torsional energy profile
+
+For each fragment, a torsion scan samples the energy at a series of dihedral
+angles. Both the reference and predicted energies are mean-centered per scan,
+so only the shape of the profile is compared rather than absolute energy
+offsets. RMSE and MAE are calculated between the reference and predicted
+profiles for each scan, then averaged across all 500 fragments.
+
+Computational cost
+------------------
+
+Medium: tests are likely to take minutes to run on GPU, or less than an hour on
+CPU for each model, since each fragment requires a single-point energy
+calculation across ~20 conformers in its torsion scan, repeated for all 500
+fragments.
+
+Data availability
+-----------------
+
+Input structures:
+
+* B. K. Rai, V. Sresht, Q. Yang, R. Unwalla, M. Tu, A. M. Mathiowetz, and
+  G. A. Bakken, TorsionNet: A Deep Neural Network to Rapidly Predict
+  Small-Molecule Torsional Energy Profiles with the Accuracy of Quantum
+  Mechanics, Journal of Chemical Information and Modeling 62 (2022), 785-800.
+  PMID: 35119861.
+
+Reference data:
+
+* J. L. Weber, R. D. Guha, G. Agarwal, Y. Wei, A. A. Fike, X. Xie,
+  J. Stevenson, B. Santra, R. A. Friesner, K. Leswing, M. D. Halls, R. Abel,
+  and L. D. Jacobson, Efficient Long-Range Machine Learning Force Fields for
+  Liquid and Materials Properties, arXiv:2505.06462 (2025).
+* DLPNO-CCSD(T)/CBS level of theory.

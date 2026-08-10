@@ -5,7 +5,15 @@ from __future__ import annotations
 from importlib import import_module
 import warnings
 
-from dash import Dash, Input, Output, callback, clientside_callback, ctx, no_update
+from dash import (
+    Dash,
+    Input,
+    Output,
+    callback,
+    clientside_callback,
+    ctx,
+    no_update,
+)
 from dash.dash_table import DataTable
 from dash.dcc import Dropdown, Interval, Link, Loading, Location, Store
 from dash.exceptions import PreventUpdate
@@ -30,7 +38,6 @@ from ml_peg.app.utils.build_components import (
 )
 from ml_peg.app.utils.onboarding import (
     build_onboarding_modal,
-    build_tutorial_button,
     register_onboarding_callbacks,
 )
 from ml_peg.app.utils.register_callbacks import (
@@ -38,12 +45,20 @@ from ml_peg.app.utils.register_callbacks import (
     register_filter_loading_callback,
     register_filter_tables_callback,
 )
+from ml_peg.app.utils.storage import (
+    build_header_controls,
+    register_storage_callbacks,
+)
 from ml_peg.app.utils.utils import (
     build_level_of_theory_warnings,
     get_framework_config,
     get_mlip_column_width,
     load_model_registry_configs,
     sig_fig_format,
+)
+from ml_peg.app.utils.weight_presets import (
+    build_weight_preset_selector,
+    register_weight_preset_callbacks,
 )
 from ml_peg.models import current_models
 from ml_peg.models.get_models import get_model_names
@@ -210,7 +225,9 @@ def _framework_sidebar_label(framework_id: str, label: str) -> Div:
     Div
         Sidebar label content with optional logo and text.
     """
-    logo = get_framework_config(framework_id).get("logo")
+    config = get_framework_config(framework_id)
+    logo = config.get("logo")
+    icon = config.get("icon")
     children = []
     if logo:
         children.append(
@@ -225,6 +242,8 @@ def _framework_sidebar_label(framework_id: str, label: str) -> Div:
                 },
             )
         )
+    if icon:
+        children.append(Span(icon, **{"aria-hidden": "true"}))
     children.append(Span(label))
     return Div(
         children,
@@ -404,7 +423,7 @@ def get_all_tests(
 
             layouts[category_name][test_app.name] = test_app.layout
             tables[category_name][test_app.name] = test_app.table
-            frameworks[category_name][test_app.name] = test_app.framework_id
+            frameworks[category_name][test_app.name] = test_app.framework_ids
 
         except FileNotFoundError as err:
             warnings.warn(
@@ -504,12 +523,12 @@ def build_category(
 
         test_entries = []
         for test_name in sorted(all_layouts[category]):
-            framework_id = all_frameworks[category][test_name]
-            framework_ids.add(framework_id)
+            test_framework_ids = all_frameworks[category][test_name]
+            framework_ids.update(test_framework_ids)
             test_entries.append(
                 {
                     "name": test_name,
-                    "framework_id": framework_id,
+                    "framework_ids": test_framework_ids,
                     "layout": all_layouts[category][test_name],
                 }
             )
@@ -614,7 +633,7 @@ def build_framework_views(
             tests = [
                 test["layout"]
                 for test in category_view["tests"]
-                if test["framework_id"] == framework_id
+                if framework_id in test["framework_ids"]
             ]
             if tests:
                 category_groups.append({"category": category_name, "tests": tests})
@@ -955,6 +974,8 @@ def build_nav(
         style={"marginBottom": "8px", "fontSize": "13px"},
     )
 
+    weight_preset_selector = build_weight_preset_selector(_summary_label_style)
+
     sidebar = Div(
         id="sidebar-nav",
         children=build_sidebar("/", category_paths, framework_paths, framework_labels),
@@ -1030,6 +1051,22 @@ def build_nav(
                         "color": "#212529",
                     },
                 ),
+                # Time-based progress bar: fills continuously over ~10s, easing
+                # toward ~95% (keyframe in loading.css; same single-element bar
+                # as the pre-hydration loader in dash_loading.css). It vanishes
+                # with the mask when ready, so it never reaches a fake 100%.
+                Div(
+                    style={
+                        "width": "200px",
+                        "height": "6px",
+                        "borderRadius": "3px",
+                        "background": (
+                            "linear-gradient(#119DFF, #119DFF) left center "
+                            "/ 5% 100% no-repeat, #d0ebff"
+                        ),
+                        "animation": "ml-peg-bar-fill 10s ease-out forwards",
+                    },
+                ),
             ],
             id="startup-mask",
             style={
@@ -1049,7 +1086,7 @@ def build_nav(
         ),
         Interval(id="startup-mask-poll", interval=250, n_intervals=0),
         build_onboarding_modal(),
-        build_tutorial_button(),
+        build_header_controls(),
         Location(id="app-location", refresh=False),
         Store(
             id="summary-table-scores-store",
@@ -1110,6 +1147,7 @@ def build_nav(
                             [
                                 get_model_filter(MODELS),
                                 cmap_selector,
+                                weight_preset_selector,
                                 get_element_filter(),
                                 Store(
                                     id="selected-models-store",
@@ -1165,6 +1203,7 @@ def build_nav(
 
     # Hide the start-up mask once the page has rendered, or after a timeout as
     # a safety net, then stop polling. Clientside, so it adds no server load.
+    # (The progress bar fills via a CSS animation, not this callback.)
     clientside_callback(
         """
         function(n) {
@@ -1180,6 +1219,8 @@ def build_nav(
         Output("startup-mask-poll", "disabled"),
         Input("startup-mask-poll", "n_intervals"),
     )
+
+    register_storage_callbacks()
 
     @callback(
         Output("model-filter-checklist", "value"),
@@ -1254,6 +1295,10 @@ def build_nav(
             return selected, selected
         raise PreventUpdate
 
+    register_weight_preset_callbacks(
+        summary_table, _default_weight_store_data(summary_table)
+    )
+
     @callback(
         Output("model-filter-details", "open"),
         Input("app-location", "pathname"),
@@ -1301,9 +1346,26 @@ def build_nav(
         )
 
         if pathname in (None, "", "/", "/summary"):
+            summary_counts = (
+                f"{len(category_views)} categories · {len(all_apps)} benchmarks"
+            )
             return Div(
                 [
                     H1("Categories Summary"),
+                    Div(
+                        summary_counts,
+                        style={
+                            "fontSize": "14px",
+                            "fontWeight": "600",
+                            "color": "#212529",
+                            "backgroundColor": "#f1f3f5",
+                            "border": "1px solid #dee2e6",
+                            "borderRadius": "6px",
+                            "padding": "8px 14px",
+                            "marginBottom": "12px",
+                            "width": "fit-content",
+                        },
+                    ),
                     Div(
                         "Scores range from 0 (worst) to 1 (best).",
                         style={

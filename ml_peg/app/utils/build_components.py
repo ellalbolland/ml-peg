@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from importlib import metadata
 from pathlib import Path
 import time
@@ -27,6 +28,7 @@ from ml_peg.app.utils.utils import (
     calculate_column_widths,
     get_framework_config,
     get_threshold_colours,
+    weight_input_style,
 )
 
 # Width (px) of the docs-link column of the summary table (see build_app.py).
@@ -123,14 +125,7 @@ def build_weight_input(
             value=default_value,
             step=0.01,
             debounce=True,
-            style={
-                "width": "60px",
-                "fontSize": "12px",
-                "padding": "2px 4px",
-                "border": "1px solid #6c757d",
-                "borderRadius": "3px",
-                "textAlign": "center",
-            },
+            style=weight_input_style(default_value),
         )
     )
 
@@ -497,7 +492,7 @@ def build_table_loading_spinner() -> Div:
     )
 
 
-def build_filter_overlay(table_id: str, child) -> Loading:
+def build_filter_overlay(table_id: str, child, delay_hide: int = 250) -> Loading:
     """
     Wrap a table in a filter-aware loading overlay.
 
@@ -514,6 +509,10 @@ def build_filter_overlay(table_id: str, child) -> Loading:
         the loading target component.
     child
         Component tree to render under the overlay.
+    delay_hide
+        Milliseconds to keep the spinner up after loading ends. A larger value
+        bridges the gaps between the several quick updates that a summary table
+        receives as scores propagate, so the user sees one spinner not several.
 
     Returns
     -------
@@ -527,7 +526,7 @@ def build_filter_overlay(table_id: str, child) -> Loading:
         custom_spinner=build_table_loading_spinner(),
         target_components={table_id: ["data", "style_data_conditional"]},
         show_initially=False,
-        delay_hide=250,
+        delay_hide=delay_hide,
         overlay_style={"visibility": "visible", "opacity": 1},
         parent_style={"position": "relative", "width": "fit-content"},
     )
@@ -548,7 +547,10 @@ def build_loading_summary_table(table: DataTable) -> Loading:
     Loading
         Loading wrapper scoped to applied filter changes and table updates.
     """
-    return build_filter_overlay(table.id, Div(table))
+    # Longer delay_hide than the default: a summary table gets several quick
+    # updates in a row as category scores propagate, so bridge the gaps into one
+    # spinner instead of several flashes.
+    return build_filter_overlay(table.id, Div(table), delay_hide=600)
 
 
 def build_plot_download_controls(graph_id: str) -> Div:
@@ -824,6 +826,8 @@ def build_framework_badge(framework_id: str) -> Component:
     color = config["color"]
     text_color = config["text_color"]
     logo = config.get("logo")
+    icon = config.get("icon")
+    tooltip = config.get("tooltip")
     url = config.get("url")
 
     badge_style = {
@@ -854,6 +858,8 @@ def build_framework_badge(framework_id: str) -> Component:
                 },
             )
         )
+    if icon:
+        badge_children.append(html.Span(icon, **{"aria-hidden": "true"}))
     badge_children.append(html.Span(label))
     badge = html.Span(
         badge_children,
@@ -868,15 +874,17 @@ def build_framework_badge(framework_id: str) -> Component:
             href=url,
             target="_blank",
             style={"textDecoration": "none"},
-            title=f"Open {label} website",
+            title=tooltip or f"Open {label} website",
         )
+    if tooltip:
+        badge.title = tooltip
     return badge
 
 
 def build_test_layout(
     name: str,
     description: str,
-    framework_id: str,
+    framework_ids: Sequence[str],
     table: DataTable,
     thresholds: Thresholds,
     extra_components: list[Component] | None = None,
@@ -892,8 +900,8 @@ def build_test_layout(
         Name of test.
     description
         Description of test.
-    framework_id
-        Framework identifier used to render attribution badge.
+    framework_ids
+        Framework identifiers used to render attribution badges.
     table
         Dash Table with metric results. Can include a `weights` attribute to be used by
         `build_weight_components`.
@@ -917,7 +925,10 @@ def build_test_layout(
         Div(
             [
                 H2(name, style={"color": "black", "margin": "0"}),
-                build_framework_badge(framework_id),
+                *[
+                    build_framework_badge(framework_id)
+                    for framework_id in framework_ids
+                ],
             ],
             style={
                 "display": "flex",
