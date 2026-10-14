@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dash import Dash
 from dash.html import Div
 
 from ml_peg.app import APP_ROOT
@@ -72,6 +71,7 @@ def get_app() -> GMTKN55App:
     """
     return GMTKN55App(
         name=BENCHMARK_NAME,
+        framework_ids="mace-multihead",
         description=(
             "Performance in predicting relative energies for 55 subsets of molecules, "
             "inclding intramolecular non-covalent interactions (NCIs), intermolecular "
@@ -85,16 +85,3 @@ def get_app() -> GMTKN55App:
         ],
         info_path=INFO_PATH,
     )
-
-
-if __name__ == "__main__":
-    # Create Dash app
-    full_app = Dash(__name__, assets_folder=DATA_PATH.parent)
-
-    # Construct layout and register callbacks
-    gmtkn55_app = get_app()
-    full_app.layout = gmtkn55_app.layout
-    gmtkn55_app.register_callbacks()
-
-    # Run app
-    full_app.run(port=8051, debug=True)

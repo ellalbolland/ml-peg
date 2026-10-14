@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 import json
 from pathlib import Path
+from typing import TypedDict
 
 from dash import ALL, Input, Output, State, callback, ctx, no_update
 from dash.dcc import Dropdown, Store
@@ -18,6 +19,8 @@ from ml_peg.analysis.utils.periodic_table import (
     PERIODIC_TABLE_SYMBOLS,
 )
 from ml_peg.app import APP_ROOT
+from ml_peg.models import current_models
+from ml_peg.models.get_models import get_model_names, load_model_configs
 
 
 def get_model_filter(models) -> Details:
@@ -46,7 +49,7 @@ def get_model_filter(models) -> Details:
                     "fontSize": "11px",
                     "textTransform": "uppercase",
                     "letterSpacing": "0.07em",
-                    "color": "#6c757d",
+                    "color": "var(--mlpeg-muted)",
                     "padding": "5px",
                 },
             ),
@@ -79,7 +82,7 @@ _SUMMARY_STYLE = {
     "fontSize": "11px",
     "textTransform": "uppercase",
     "letterSpacing": "0.07em",
-    "color": "#6c757d",
+    "color": "var(--mlpeg-muted)",
     "padding": "5px",
 }
 
@@ -91,21 +94,21 @@ _BTN_BASE = {
     "height": f"{_CELL}px",
     "fontSize": "9px",
     "fontWeight": "500",
-    "border": "1px solid #ced4da",
+    "border": "1px solid var(--mlpeg-border-strong)",
     "borderRadius": "2px",
     "cursor": "pointer",
     "lineHeight": f"{_CELL}px",
     "textAlign": "center",
-    "backgroundColor": "#e9ecef",
-    "color": "#343a40",
+    "backgroundColor": "var(--mlpeg-surface-3)",
+    "color": "var(--mlpeg-heading)",
     "overflow": "hidden",
 }
 
 _BTN_EXCLUDED = {
     **_BTN_BASE,
-    "backgroundColor": "#f5c2c7",
-    "border": "1px solid #dc3545",
-    "color": "#842029",
+    "backgroundColor": "var(--mlpeg-bad-soft)",
+    "border": "1px solid var(--mlpeg-bad-border)",
+    "color": "var(--mlpeg-bad-fg)",
     "fontWeight": "700",
 }
 
@@ -127,11 +130,27 @@ _LEGEND_SWATCH_EXCLUDED = {
 _PRESET_BUTTON_STYLE = {
     "padding": "4px 8px",
     "fontSize": "12px",
-    "backgroundColor": "#f8f9fa",
-    "color": "#343a40",
-    "border": "1px solid #ced4da",
+    "backgroundColor": "var(--mlpeg-surface-2)",
+    "color": "var(--mlpeg-heading)",
+    "border": "1px solid var(--mlpeg-border-strong)",
     "borderRadius": "4px",
     "cursor": "pointer",
+}
+
+_APPLY_BUTTON_STYLE = {
+    "padding": "4px 12px",
+    "fontSize": "12px",
+    "backgroundColor": "var(--mlpeg-accent)",
+    "color": "#fff",
+    "border": "none",
+    "borderRadius": "4px",
+    "cursor": "pointer",
+}
+
+# Apply style when the staged selection differs from the committed filter.
+_APPLY_BUTTON_STYLE_PENDING = {
+    **_APPLY_BUTTON_STYLE,
+    "boxShadow": "0 0 0 3px rgba(34, 139, 230, 0.35)",
 }
 
 _ELEMENT_COVERAGE_PATH = APP_ROOT / "data" / "element_coverage.json"
@@ -159,28 +178,126 @@ def _load_element_coverage(path: Path = _ELEMENT_COVERAGE_PATH) -> dict:
         return {}
 
 
-def _dataset_presets() -> tuple[dict, ...]:
+class ElementPreset(TypedDict):
+    """A named element-filter preset and the elements it keeps."""
+
+    id: str
+    label: str
+    include: tuple[str, ...]
+    title: str
+
+
+def _dataset_presets() -> tuple[ElementPreset, ...]:
     """
     Build preset entries from element_coverage.json dataset keys.
 
+    Datasets that share an identical supported-element set are merged into a
+    single preset (label = their names joined with "/"), so families with the
+    same coverage (e.g. MPtrj/sAlex/OMAT) render as one button and future
+    identical-coverage datasets fold in automatically.
+
     Returns
     -------
-    tuple[dict, ...]
-        One preset dict per dataset entry in the coverage file.
+    tuple[ElementPreset, ...]
+        One preset per group of identical-coverage datasets.
     """
     datasets = _load_element_coverage().get("datasets", {})
-    return tuple(
-        {
-            "id": name.lower().replace("/", "-").replace(" ", "-"),
-            "label": name,
-            "include": tuple(
-                s for s in PERIODIC_TABLE_SYMBOLS if s in set(data["supported"])
-            ),
-            "title": f"Keep elements covered by {name} training data",
-        }
-        for name, data in datasets.items()
-        if data.get("supported")
+    groups: dict[frozenset[str], list[str]] = {}
+    order: list[frozenset[str]] = []
+    for name, data in datasets.items():
+        supported = data.get("supported")
+        if not supported:
+            continue
+        key = frozenset(supported)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(name)
+
+    presets = []
+    for key in order:
+        label = "/".join(groups[key])
+        presets.append(
+            {
+                "id": label.lower().replace("/", "-").replace(" ", "-"),
+                "label": label,
+                "include": tuple(s for s in PERIODIC_TABLE_SYMBOLS if s in key),
+                "title": f"Keep elements covered by {label} training data",
+            }
+        )
+    return tuple(presets)
+
+
+@lru_cache(maxsize=1)
+def _model_supported_elements() -> dict[str, frozenset[str]]:
+    """
+    Map each model to the elements it covers.
+
+    A model's elements are the union of the ``supported`` sets of every dataset
+    listed under its ``datasets`` key in ``models.yml``, plus any elements listed
+    under its ``additional_supported_elements`` key (for models that support more
+    than their datasets imply). Models with neither, or whose datasets are absent
+    from the coverage file, are omitted (treated as untagged).
+
+    Returns
+    -------
+    dict[str, frozenset[str]]
+        Supported elements keyed by model name, for tagged models only.
+    """
+    coverage = _load_element_coverage().get("datasets", {})
+    models = get_model_names(current_models)
+    configs, _ = load_model_configs(tuple(models))
+
+    result: dict[str, frozenset[str]] = {}
+    for model in models:
+        config = configs.get(model, {})
+        elements: set[str] = set()
+        for dataset in config.get("datasets") or []:
+            supported = coverage.get(dataset, {}).get("supported")
+            if supported:
+                elements.update(supported)
+        elements.update(config.get("additional_supported_elements") or [])
+        if elements:
+            result[model] = frozenset(elements)
+    return result
+
+
+def _selected_models_excluded_symbols(
+    selected_models: list[str] | None,
+    mode: str,
+) -> list[str] | None:
+    """
+    Return symbols to exclude to keep the union/intersection of model coverage.
+
+    Parameters
+    ----------
+    selected_models
+        Currently selected model names.
+    mode
+        Either ``"union"`` (elements supported by any selected model) or
+        ``"intersection"`` (elements supported by every selected model).
+
+    Returns
+    -------
+    list[str] | None
+        Symbols outside the combined coverage, or ``None`` if no selected model
+        is tagged with usable dataset coverage.
+    """
+    model_elements = _model_supported_elements()
+    sets = [
+        model_elements[model]
+        for model in (selected_models or [])
+        if model in model_elements
+    ]
+    if not sets:
+        return None
+
+    keep = (
+        set(sets[0]).union(*sets)
+        if mode == "union"
+        else set(sets[0]).intersection(*sets)
     )
+    return [symbol for symbol in PERIODIC_TABLE_SYMBOLS if symbol not in keep]
 
 
 _ELEMENT_FILTER_PRESET_GROUPS = (
@@ -266,7 +383,7 @@ def _build_preset_section() -> Div:
                         style={
                             "fontSize": "11px",
                             "fontWeight": "600",
-                            "color": "#6c757d",
+                            "color": "var(--mlpeg-muted)",
                             "minWidth": "92px",
                         },
                     ),
@@ -300,19 +417,70 @@ def _build_preset_section() -> Div:
             )
         )
 
-    return Div(
+    # Row of buttons deriving the keep-set from the currently selected models'
+    # dataset coverage, rather than a fixed preset.
+    selected_models_row = Div(
         [
             Span(
-                "Presets",
+                "Selected models",
                 style={
                     "fontSize": "11px",
                     "fontWeight": "600",
                     "textTransform": "uppercase",
                     "letterSpacing": "0.07em",
-                    "color": "#6c757d",
+                    "color": "var(--mlpeg-muted)",
+                    "minWidth": "92px",
                 },
             ),
+            Div(
+                [
+                    Button(
+                        "Union",
+                        id="element-filter-union",
+                        n_clicks=0,
+                        title="Keep elements covered by any selected model",
+                        style=_PRESET_BUTTON_STYLE,
+                    ),
+                    Button(
+                        "Intersection",
+                        id="element-filter-intersection",
+                        n_clicks=0,
+                        title="Keep elements covered by every selected model",
+                        style=_PRESET_BUTTON_STYLE,
+                    ),
+                ],
+                style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
+            ),
+        ],
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "gap": "8px",
+            "flexWrap": "wrap",
+        },
+    )
+
+    return Div(
+        [
+            Div(
+                [
+                    Span(
+                        "Presets",
+                        style={
+                            "fontWeight": "600",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.07em",
+                        },
+                    ),
+                    Span(
+                        " — keep only the chosen set",
+                        style={"fontStyle": "italic"},
+                    ),
+                ],
+                style={"fontSize": "11px", "color": "var(--mlpeg-muted, #6c757d)"},
+            ),
             *groups,
+            selected_models_row,
         ],
         style={
             "display": "flex",
@@ -320,7 +488,7 @@ def _build_preset_section() -> Div:
             "gap": "6px",
             "marginTop": "8px",
             "paddingTop": "10px",
-            "borderTop": "1px solid #dee2e6",
+            "borderTop": "1px solid var(--mlpeg-border)",
         },
     )
 
@@ -345,6 +513,9 @@ def get_element_filter() -> Div:
             id={"type": "element-btn", "index": sym},
             n_clicks=0,
             style=_btn_style(sym, False),
+            # State is otherwise colour-only; the title carries it to screen
+            # readers (and as a hover tooltip) and is updated by the sync callback.
+            title=f"{sym} — included",
         )
         for sym in PERIODIC_TABLE_SYMBOLS
     ]
@@ -388,7 +559,7 @@ def get_element_filter() -> Div:
             "flexDirection": "column",
             "gap": "6px",
             "fontSize": "12px",
-            "color": "#343a40",
+            "color": "var(--mlpeg-heading)",
             "paddingTop": "2px",
             "whiteSpace": "nowrap",
         },
@@ -409,15 +580,7 @@ def get_element_filter() -> Div:
                 "Apply",
                 id="element-filter-apply",
                 n_clicks=0,
-                style={
-                    "padding": "4px 12px",
-                    "fontSize": "12px",
-                    "backgroundColor": "#228be6",
-                    "color": "#fff",
-                    "border": "none",
-                    "borderRadius": "4px",
-                    "cursor": "pointer",
-                },
+                style=_APPLY_BUTTON_STYLE,
             ),
             Button(
                 "Exclude all",
@@ -426,9 +589,9 @@ def get_element_filter() -> Div:
                 style={
                     "padding": "4px 12px",
                     "fontSize": "12px",
-                    "backgroundColor": "#fff5f5",
-                    "color": "#842029",
-                    "border": "1px solid #f1aeb5",
+                    "backgroundColor": "var(--mlpeg-bad-soft)",
+                    "color": "var(--mlpeg-bad-fg)",
+                    "border": "1px solid var(--mlpeg-bad-border)",
                     "borderRadius": "4px",
                     "cursor": "pointer",
                 },
@@ -440,9 +603,9 @@ def get_element_filter() -> Div:
                 style={
                     "padding": "4px 12px",
                     "fontSize": "12px",
-                    "backgroundColor": "#e9ecef",
-                    "color": "#343a40",
-                    "border": "1px solid #ced4da",
+                    "backgroundColor": "var(--mlpeg-surface-3)",
+                    "color": "var(--mlpeg-heading)",
+                    "border": "1px solid var(--mlpeg-border-strong)",
                     "borderRadius": "4px",
                     "cursor": "pointer",
                 },
@@ -455,12 +618,35 @@ def get_element_filter() -> Div:
             "alignItems": "center",
         },
     )
+    grid_caption = Span(
+        "Click on elements to exclude them, then Apply to update tables.",
+        style={
+            "display": "block",
+            "fontSize": "12px",
+            "color": "var(--mlpeg-muted, #6c757d)",
+            "marginBottom": "6px",
+        },
+    )
+
+    total = len(PERIODIC_TABLE_SYMBOLS)
+    count_display = Span(
+        f"Keeping {total} / {total} elements",
+        id="element-filter-count",
+        style={
+            "display": "block",
+            "fontSize": "12px",
+            "color": "var(--mlpeg-muted, #6c757d)",
+            "marginTop": "8px",
+        },
+    )
+
     filter_body = Div(
         [
             Div(
-                [grid_with_legend, _build_preset_section()],
+                [grid_caption, grid_with_legend, _build_preset_section()],
                 style={"width": "fit-content"},
             ),
+            count_display,
             actions,
         ]
     )
@@ -469,7 +655,7 @@ def get_element_filter() -> Div:
         [
             Details(
                 [
-                    Summary("Exclude elements", style=_SUMMARY_STYLE),
+                    Summary("Element filtering", style=_SUMMARY_STYLE),
                     Div(filter_body, style={"padding": "8px 12px"}),
                 ],
                 id="element-filter-details",
@@ -521,12 +707,14 @@ def register_element_filter_callbacks() -> None:
 
     @callback(
         Output({"type": "element-btn", "index": ALL}, "style"),
+        Output({"type": "element-btn", "index": ALL}, "title"),
+        Output("element-filter-count", "children"),
         Input("element-filter-pending", "data"),
         prevent_initial_call=True,
     )
     def sync_button_styles(pending):
         """
-        Synchronise element button styles with the pending selection.
+        Synchronise element button styles, titles, and kept-count with selection.
 
         Parameters
         ----------
@@ -535,11 +723,46 @@ def register_element_filter_callbacks() -> None:
 
         Returns
         -------
-        list
-            Style dictionaries for all periodic-table element buttons.
+        tuple
+            Style dictionaries and accessible titles for all element buttons,
+            plus the kept-count text. The title conveys included/excluded state
+            to screen readers (the style alone conveys it only through colour).
         """
         excluded = set(pending or [])
-        return [_btn_style(sym, sym in excluded) for sym in all_symbols]
+        styles = [_btn_style(sym, sym in excluded) for sym in all_symbols]
+        titles = [
+            f"{sym} — {'excluded' if sym in excluded else 'included'}"
+            for sym in all_symbols
+        ]
+        kept = len(all_symbols) - len(excluded & set(all_symbols))
+        return styles, titles, f"Keeping {kept} / {len(all_symbols)} elements"
+
+    @callback(
+        Output("element-filter-apply", "children"),
+        Output("element-filter-apply", "style"),
+        Input("element-filter-pending", "data"),
+        Input("element-filter", "data"),
+        prevent_initial_call=False,
+    )
+    def flag_unapplied(pending, committed):
+        """
+        Mark the Apply button when the staged selection is not yet committed.
+
+        Parameters
+        ----------
+        pending
+            Currently pending element exclusion selection.
+        committed
+            Currently committed element filter.
+
+        Returns
+        -------
+        tuple
+            Apply button label and style reflecting whether changes are pending.
+        """
+        if set(pending or []) != set(committed or []):
+            return "Apply •", _APPLY_BUTTON_STYLE_PENDING
+        return "Apply", _APPLY_BUTTON_STYLE
 
     @callback(
         Output("element-filter", "data"),
@@ -548,11 +771,24 @@ def register_element_filter_callbacks() -> None:
         Input("element-filter-exclude-all", "n_clicks"),
         Input("element-filter-clear", "n_clicks"),
         Input({"type": "element-filter-preset", "index": ALL}, "n_clicks"),
+        Input("element-filter-union", "n_clicks"),
+        Input("element-filter-intersection", "n_clicks"),
         State("element-filter", "data"),
         State("element-filter-pending", "data"),
+        State("selected-models-store", "data"),
         prevent_initial_call=True,
     )
-    def apply_or_clear(_apply, _exclude_all, _clear, _presets, current, pending):
+    def apply_or_clear(
+        _apply,
+        _exclude_all,
+        _clear,
+        _presets,
+        _union,
+        _intersection,
+        current,
+        pending,
+        selected_models,
+    ):
         """
         Handle "Apply", clear, or bulk-update element exclusion actions.
 
@@ -566,10 +802,16 @@ def register_element_filter_callbacks() -> None:
             Click count for the Clear button.
         _presets
             Click counts for preset element-set buttons.
+        _union
+            Click count for the selected-models Union button.
+        _intersection
+            Click count for the selected-models Intersection button.
         current
             Currently committed element exclusion selection.
         pending
             Currently pending element exclusion selection.
+        selected_models
+            Models currently selected in the global model filter.
 
         Returns
         -------
@@ -596,4 +838,10 @@ def register_element_filter_callbacks() -> None:
             if sorted(preset_excluded) == pending:
                 raise PreventUpdate
             return no_update, preset_excluded
+        if trigger in ("element-filter-union", "element-filter-intersection"):
+            mode = "union" if trigger == "element-filter-union" else "intersection"
+            excluded = _selected_models_excluded_symbols(selected_models, mode)
+            if excluded is None or sorted(excluded) == pending:
+                raise PreventUpdate
+            return no_update, excluded
         raise PreventUpdate

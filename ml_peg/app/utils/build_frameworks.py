@@ -1,0 +1,359 @@
+"""Framework page and summary-table builders for the ML-PEG app."""
+
+from __future__ import annotations
+
+from typing import TypedDict
+
+from dash.dash_table import DataTable
+from dash.html import H1, H2, A, Br, Div, Img, Span
+
+from ml_peg.app.utils.build_components import (
+    build_benchmark_card,
+    build_collapse_controls,
+    build_download_controls,
+    build_loading_summary_table,
+    build_speed_panel,
+    build_summary_table,
+    build_weight_components,
+    table_wrapper_style,
+)
+from ml_peg.app.utils.icons import GITHUB_ICON
+from ml_peg.app.utils.utils import get_framework_config
+
+
+class CategoryTest(TypedDict):
+    """One benchmark's entry within a category view."""
+
+    name: str
+    framework_ids: list[str]
+    layout: Div
+    key: str
+    speed: str | None
+
+
+class CategoryView(TypedDict):
+    """Data needed to build a single category page."""
+
+    title: str
+    description: str
+    summary_table: DataTable
+    weight_components: Div
+    tests: list[CategoryTest]
+
+
+class _FrameworkViewRequired(TypedDict):
+    """Keys always present in a framework page view."""
+
+    framework_id: str
+    label: str
+    speeds: dict[str, str | None]
+    # Each benchmark is kept as a (name, layout) pair so the framework page can
+    # wrap it in a lazy-mounted collapsible card (see build_framework_page_layout).
+    benchmarks_by_category: dict[str, list[tuple[str, Div]]]
+
+
+class FrameworkView(_FrameworkViewRequired, total=False):
+    """
+    Data needed to build a single framework page.
+
+    Inherits the required keys and adds the summary table and weight controls,
+    which are only set once the framework's summary table has been built.
+    """
+
+    summary_table: DataTable
+    weight_components: Div
+
+
+def build_framework_views(
+    category_views: dict[str, CategoryView],
+    framework_ids: set[str],
+) -> dict[str, FrameworkView]:
+    """
+    Build extra framework-focused page metadata for non-default frameworks.
+
+    Parameters
+    ----------
+    category_views
+        Category metadata including benchmark layout components.
+    framework_ids
+        All framework IDs discovered from benchmark apps.
+
+    Returns
+    -------
+    dict[str, FrameworkView]
+        Mapping of framework ID to grouped benchmark layouts by category.
+    """
+    framework_views: dict[str, FrameworkView] = {}
+    for framework_id in sorted(framework_ids):
+        if framework_id == "ml_peg":
+            continue
+
+        benchmarks_by_category: dict[str, list[tuple[str, Div]]] = {}
+        speeds: dict[str, str | None] = {}
+        for category_name, category_view in category_views.items():
+            matching = [
+                test
+                for test in category_view["tests"]
+                if framework_id in test["framework_ids"]
+            ]
+            if matching:
+                benchmarks_by_category[category_name] = [
+                    (test["name"], test["layout"]) for test in matching
+                ]
+                speeds.update({test["key"]: test["speed"] for test in matching})
+
+        if benchmarks_by_category:
+            framework_views[framework_id] = {
+                "framework_id": framework_id,
+                "label": get_framework_config(framework_id)["label"],
+                "benchmarks_by_category": benchmarks_by_category,
+                "speeds": speeds,
+            }
+
+    return framework_views
+
+
+def build_framework_summary_tables(
+    all_tables: dict[str, dict[str, DataTable]],
+    all_frameworks: dict[str, dict[str, str]],
+    framework_views: dict[str, FrameworkView],
+) -> tuple[dict[str, DataTable], dict[str, dict[str, DataTable]]]:
+    """
+    Build a per-framework summary table for each framework page.
+
+    Parameters
+    ----------
+    all_tables
+        Benchmark tables grouped by category.
+    all_frameworks
+        Framework ids for each benchmark, grouped by category.
+    framework_views
+        Framework page metadata, keyed by the frameworks to build tables for.
+        ``ml_peg`` and empty frameworks are already excluded.
+
+    Returns
+    -------
+    tuple[dict[str, DataTable], dict[str, dict[str, DataTable]]]
+        Per-framework summary tables keyed by framework id, and the
+        {framework_id: {benchmark_name: benchmark_table}} grouping.
+    """
+    framework_tables: dict[str, DataTable] = {}
+    framework_grouping: dict[str, dict[str, DataTable]] = {}
+
+    for framework_id in framework_views:
+        # Gather benchmark tables tagged with this framework (deterministic order)
+        benchmarks: dict[str, DataTable] = {}
+        for category in sorted(all_tables):
+            for test_name in sorted(all_tables[category]):
+                if framework_id in all_frameworks[category][test_name]:
+                    benchmarks[test_name] = all_tables[category][test_name]
+        if not benchmarks:
+            continue
+
+        summary_table = build_summary_table(
+            benchmarks,
+            table_id=f"{framework_id}-framework-summary-table",
+            description=str(framework_views[framework_id]["label"]),
+        )
+        weight_components = build_weight_components(
+            header="Weights",
+            table=summary_table,
+            include_download_controls=False,
+            column_widths=getattr(summary_table, "column_widths", None),
+        )
+        framework_views[framework_id]["summary_table"] = summary_table
+        framework_views[framework_id]["weight_components"] = weight_components
+        framework_tables[framework_id] = summary_table
+        framework_grouping[framework_id] = benchmarks
+
+    return framework_tables, framework_grouping
+
+
+def build_framework_page_layout(
+    framework_view: FrameworkView,
+    expand_pref: str | None = None,
+) -> Div:
+    """
+    Build a framework-focused page with its summary table and benchmark sections.
+
+    Parameters
+    ----------
+    framework_view
+        Framework page metadata with grouped benchmark layouts by category.
+    expand_pref
+        Persisted preference: ``"expanded"`` opens every card, ``"collapsed"``
+        closes every card, and ``None`` opens only the first card on the page.
+
+    Returns
+    -------
+    Div
+        Framework page layout.
+    """
+    framework_label = framework_view["label"]
+    benchmarks_by_category = framework_view["benchmarks_by_category"]
+    config = get_framework_config(framework_view["framework_id"])
+    summary_table = framework_view.get("summary_table")
+    weight_components = framework_view.get("weight_components")
+
+    link_style = {
+        "display": "inline-flex",
+        "alignItems": "center",
+        "gap": "6px",
+        "padding": "6px 12px",
+        "borderRadius": "8px",
+        "backgroundColor": "var(--mlpeg-surface)",
+        "border": "1px solid var(--mlpeg-border)",
+        "color": "var(--mlpeg-ink-2)",
+        "fontSize": "13px",
+        "fontWeight": "500",
+        "textDecoration": "none",
+    }
+    link_specs = []
+    if config.get("paper_url"):
+        link_specs.append((Span("📄"), "Paper", config["paper_url"]))
+    if config.get("project_url"):
+        link_specs.append((Span("🌐"), "Website", config["project_url"]))
+    if config.get("github"):
+        github_icon = Img(src=GITHUB_ICON, style={"height": "15px", "display": "block"})
+        link_specs.append((github_icon, "GitHub", config["github"]))
+    links = [
+        A([icon, label], href=href, target="_blank", style=link_style)
+        for icon, label, href in link_specs
+    ]
+
+    description_box_children = []
+    if config.get("description"):
+        description_box_children.append(
+            Div(
+                config["description"],
+                style={
+                    "fontSize": "15px",
+                    "lineHeight": "1.6",
+                    "color": "var(--mlpeg-ink-2)",
+                    "maxWidth": "760px",
+                },
+            )
+        )
+    if links:
+        description_box_children.append(
+            Div(
+                links,
+                style={
+                    "display": "flex",
+                    "flexWrap": "wrap",
+                    "gap": "10px",
+                    "marginTop": "12px" if description_box_children else "0",
+                },
+            )
+        )
+
+    description_box_block = []
+    if description_box_children:
+        description_box_block.append(
+            Div(
+                description_box_children,
+                style={
+                    "backgroundColor": "var(--mlpeg-surface-2)",
+                    "border": "1px solid var(--mlpeg-border)",
+                    "borderRadius": "12px",
+                    "padding": "16px 20px",
+                    "marginTop": "10px",
+                    "marginBottom": "8px",
+                    "width": "fit-content",
+                    "maxWidth": "820px",
+                },
+            )
+        )
+
+    # Wrap each benchmark in a lazy-mounted collapsible card so heavy framework
+    # pages (e.g. MACE-POLAR-1 with many benchmarks) hydrate instantly instead of
+    # rendering every benchmark up front. Only the first card on the page opens by
+    # default, unless the user has saved an expanded or collapsed preference.
+    sections = []
+    card_index = 0
+    for category_name, tests in benchmarks_by_category.items():
+        sections.append(
+            Div(
+                style={
+                    "width": "100%",
+                    "height": "1px",
+                    "backgroundColor": "var(--mlpeg-divider)",
+                    "margin": "32px 0 0",
+                }
+            )
+        )
+        sections.append(
+            H2(
+                category_name,
+                style={
+                    "color": "var(--mlpeg-heading)",
+                    "fontSize": "30px",
+                    "marginTop": "24px",
+                    "marginBottom": "12px",
+                },
+            )
+        )
+        cards = []
+        for name, layout in tests:
+            cards.append(
+                build_benchmark_card(
+                    name,
+                    layout,
+                    open_default=expand_pref == "expanded"
+                    or (expand_pref is None and card_index == 0),
+                )
+            )
+            card_index += 1
+        # Same grid class as category pages: an implicit `auto` track sizes to
+        # max-content, so a wide benchmark table would stretch the track and the
+        # .mlpeg-table-scroll wrapper inside it would have nothing to scroll
+        # against — the framework pages kept the inline grid and missed that.
+        sections.append(Div(cards, className="mlpeg-benchmark-grid"))
+
+    summary_block = []
+    if summary_table is not None:
+        # Wrap in the same scroll-card as category pages so a wide framework
+        # summary (e.g. MACE-POLAR-1's many benchmark columns) scrolls inside
+        # its card instead of spanning the whole page.
+        summary_block = [
+            Div(
+                Div(
+                    Div(
+                        [
+                            build_download_controls(summary_table.id, row=True),
+                            build_loading_summary_table(summary_table),
+                            Br(),
+                            Div(weight_components, className="mlpeg-controls-panel"),
+                        ],
+                        style=table_wrapper_style(summary_table),
+                    ),
+                    className="mlpeg-table-scroll",
+                ),
+                className="mlpeg-summary-card",
+            ),
+        ]
+
+    return Div(
+        [
+            H1(f"{framework_label} Benchmarks"),
+            *description_box_block,
+            Div(
+                (
+                    "These benchmarks also appear on their category pages and "
+                    "share the same benchmark controls, so weight and threshold "
+                    "edits stay in sync across both views."
+                ),
+                style={
+                    "fontSize": "13px",
+                    "fontStyle": "italic",
+                    "color": "var(--mlpeg-ink-3)",
+                    "marginTop": "8px",
+                    "marginBottom": "8px",
+                },
+            ),
+            *summary_block,
+            build_speed_panel(framework_view["speeds"]),
+            build_collapse_controls(),
+            *sections,
+        ]
+    )

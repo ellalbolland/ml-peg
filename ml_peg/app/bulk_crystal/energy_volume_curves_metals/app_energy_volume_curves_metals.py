@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dash import ALL, Dash, Input, Output, callback, callback_context
+from dash import ALL, Input, Output, callback, callback_context
 from dash.dcc import Graph
 from dash.exceptions import PreventUpdate
 from dash.html import Div
@@ -116,6 +116,7 @@ def get_app() -> EquationOfStateApp:
     """
     return EquationOfStateApp(
         name=BENCHMARK_NAME,
+        framework_ids="mace-mp",
         description=(
             "Energy-volume curves and phase stability for BCC metals "
             "(W, Nb, Mo, Ta, Ti, Zr, Cr, Fe),"
@@ -129,11 +130,3 @@ def get_app() -> EquationOfStateApp:
         ],
         info_path=INFO_PATH,
     )
-
-
-if __name__ == "__main__":
-    full_app = Dash(__name__, assets_folder=DATA_PATH.parent.parent)
-    equation_of_state_app = get_app()
-    full_app.layout = equation_of_state_app.layout
-    equation_of_state_app.register_callbacks()
-    full_app.run(port=8054, debug=True)

@@ -191,7 +191,8 @@ def _ref_complete(mp_id: str, out_dir: Path) -> bool:
     )
 
 
-@pytest.mark.slow
+@pytest.mark.framework("mace-multihead")
+@pytest.mark.medium
 def test_phonons_ref(alex_phonon_inputs: tuple[Path, list[str]]) -> None:
     """
     Generate DFT reference outputs from ALEX pre-computed force constants.
@@ -413,7 +414,7 @@ def _calc_model_mp_id(
     success = True
     with redirect_stdout(log), redirect_stderr(log):
         try:
-            calc = model.get_calculator()
+            calc = model.get_calculator(precision="high")
             _calc_mp_id(mp_id, calc, yaml_dir, ref_dir, out_dir)
         except Exception:  # noqa: BLE001
             success = False
@@ -421,7 +422,8 @@ def _calc_model_mp_id(
     return mp_id, success, log.getvalue()
 
 
-@pytest.mark.very_slow
+@pytest.mark.framework("mace-multihead")
+@pytest.mark.slow
 @pytest.mark.parametrize("model_name", MODEL_NAMES)
 def test_phonons(
     model_name: str,

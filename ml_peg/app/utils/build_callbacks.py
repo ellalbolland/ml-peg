@@ -2,31 +2,90 @@
 
 from __future__ import annotations
 
-import base64
-from collections.abc import Callable
-import io
-import json
-import math
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Literal
 
-from dash import Input, Output, State, callback, callback_context, html
+import dash
+from dash import (
+    MATCH,
+    ClientsideFunction,
+    Input,
+    Output,
+    State,
+    callback,
+    callback_context,
+    clientside_callback,
+    html,
+)
 from dash.dcc import Graph
 from dash.development.base_component import Component
 from dash.exceptions import PreventUpdate
 from dash.html import Div, Iframe
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
 
-from ml_peg.analysis.utils.periodic_table import (
-    PERIODIC_TABLE_COLS,
-    PERIODIC_TABLE_POSITIONS,
-    PERIODIC_TABLE_ROWS,
-)
 from ml_peg.app.utils.build_components import build_plot_download_controls
+from ml_peg.app.utils.load import read_plot
 from ml_peg.app.utils.plot_helpers import INSTRUCTION_STYLE, POINT_HINT, TABLE_HINT
+from ml_peg.app.utils.plot_settings import build_plot_settings_controls
 from ml_peg.app.utils.register_callbacks import register_plot_download_callbacks
 from ml_peg.app.utils.weas import generate_weas_html
+
+
+def register_plot_settings_callbacks() -> None:
+    """Register the shared client-side plot-axis callback once per Dash app."""
+    app = dash.get_app()
+    output = Output({"type": "plot-settings-result", "index": MATCH}, "data")
+    # A multi-output callback is keyed by all of its outputs joined together, so
+    # look for this one within each key rather than as a key of its own.
+    if any(str(output) in key for key in app.callback_map):
+        return
+
+    app.clientside_callback(
+        ClientsideFunction(namespace="plot_settings", function_name="applyAxes"),
+        output,
+        Output({"type": "plot-settings-message", "index": MATCH}, "children"),
+        Output({"type": "plot-settings-x-scale", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-scale", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-min", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-max", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-min", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-max", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-size-preset", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-width", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-height", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-reverse", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-reverse", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-tick-format", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-tick-precision", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-x-tick-spacing", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-tick-format", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-tick-precision", "index": MATCH}, "value"),
+        Output({"type": "plot-settings-y-tick-spacing", "index": MATCH}, "value"),
+        Input({"type": "plot-settings-apply", "index": MATCH}, "n_clicks"),
+        Input({"type": "plot-settings-reset", "index": MATCH}, "n_clicks"),
+        Input({"type": "plot-settings-x-autoscale", "index": MATCH}, "n_clicks"),
+        Input({"type": "plot-settings-y-autoscale", "index": MATCH}, "n_clicks"),
+        Input({"type": "plot-settings-summary", "index": MATCH}, "n_clicks"),
+        State({"type": "plot-settings-x-scale", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-scale", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-min", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-max", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-min", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-max", "index": MATCH}, "value"),
+        State({"type": "plot-settings-size-preset", "index": MATCH}, "value"),
+        State({"type": "plot-settings-width", "index": MATCH}, "value"),
+        State({"type": "plot-settings-height", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-reverse", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-reverse", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-tick-format", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-tick-precision", "index": MATCH}, "value"),
+        State({"type": "plot-settings-x-tick-spacing", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-tick-format", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-tick-precision", "index": MATCH}, "value"),
+        State({"type": "plot-settings-y-tick-spacing", "index": MATCH}, "value"),
+        State({"type": "plot-settings-graph-id", "index": MATCH}, "data"),
+        prevent_initial_call=True,
+    )
 
 
 def plot_with_download_controls(graph: Graph) -> Div:
@@ -49,6 +108,7 @@ def plot_with_download_controls(graph: Graph) -> Div:
     return Div(
         [
             build_plot_download_controls(graph_id),
+            build_plot_settings_controls(graph_id),
             Div(POINT_HINT, style=INSTRUCTION_STYLE),
             graph,
         ]
@@ -71,6 +131,7 @@ def plot_from_table_column(
         Dictionary relating table headers (keys) and plot to show (values).
     """
     register_plot_download_callbacks()
+    register_plot_settings_callbacks()
 
     @callback(
         Output(plot_id, "children"),
@@ -123,6 +184,7 @@ def plot_from_table_cell(
         cells with None values will show "No data available" message.
     """
     register_plot_download_callbacks()
+    register_plot_settings_callbacks()
 
     @callback(
         Output(plot_id, "children"),
@@ -166,6 +228,179 @@ def plot_from_table_cell(
         return Div(TABLE_HINT, style=INSTRUCTION_STYLE), None
 
 
+def clear_from_table_cell(table_id: str, plot_ids: Sequence[str]) -> None:
+    """
+    Attach callback to clear placeholder Divs when a table cell is clicked.
+
+    Stops plots derived from a previously selected cell, such as a different
+    model's, from lingering after switching.
+
+    Parameters
+    ----------
+    table_id
+        ID for Dash table being clicked.
+    plot_ids
+        IDs of placeholder Divs to empty.
+    """
+
+    @callback(
+        *[Output(plot_id, "children", allow_duplicate=True) for plot_id in plot_ids],
+        Input(table_id, "active_cell"),
+        prevent_initial_call=True,
+    )
+    def clear_plots(active_cell):
+        """
+        Register callback to clear placeholders on table cell selection.
+
+        Parameters
+        ----------
+        active_cell
+            Clicked cell in Dash table.
+
+        Returns
+        -------
+        Div | tuple[Div, ...]
+            An empty Div per ID in ``plot_ids``.
+        """
+        if len(plot_ids) == 1:
+            return Div()
+        return tuple(Div() for _ in plot_ids)
+
+
+# A scatter can be passed to more than one helper, but its highlight callback
+# should only be registered once. Store the first frame-follow setting so later
+# registrations can be skipped or rejected when they disagree.
+registered_highlights: dict[str, bool] = {}
+
+
+def _register_point_highlight(scatter_id: str, follow_frames: bool = True) -> None:
+    """
+    Highlight the most recently clicked point or bar.
+
+    Registered once per ``scatter_id`` and runs entirely client-side, so it adds
+    no server load and works for any scatter wired for click interactions.
+    Scatter clicks use a transparent-fill ``__clicked_point__`` ring trace.
+    Bar clicks instead add an outline directly to the complete selected bar so
+    Plotly does not render a second, partially overlapping bar. Frame following
+    can be disabled for viewers whose frames do not correspond one-to-one with
+    scatter points, such as a density cell containing multiple structures.
+
+    Parameters
+    ----------
+    scatter_id
+        ID of the Dash ``Graph`` whose clicked point should be highlighted.
+    follow_frames
+        Whether a WEAS frame-change event moves the highlight to the point at
+        the same index. Default is True.
+    """
+    existing_follow_frames = registered_highlights.get(scatter_id)
+    if existing_follow_frames is not None:
+        if existing_follow_frames != follow_frames:
+            raise ValueError(
+                f"Conflicting frame-follow settings for scatter {scatter_id!r}."
+            )
+        return
+    registered_highlights[scatter_id] = follow_frames
+
+    clientside_callback(
+        """
+        function(clickData, figure) {
+            const dc = window.dash_clientside;
+            if (!clickData || !figure || !figure.data) { return dc.no_update; }
+            const pt = clickData.points[0];
+            const src = figure.data[pt.curveNumber] || {};
+            const data = figure.data.filter(
+                (t) => t.name !== '__clicked_point__'
+            );
+            if (src.type === 'bar') {
+                const count = Array.isArray(src.x) ? src.x.length : 0;
+                const lineColors = Array(count).fill('rgba(0,0,0,0)');
+                const lineWidths = Array(count).fill(0);
+                lineColors[pt.pointNumber] = '#ff1493';
+                lineWidths[pt.pointNumber] = 3;
+                const marker = Object.assign({}, src.marker || {}, {
+                    line: {color: lineColors, width: lineWidths},
+                });
+                data[pt.curveNumber] = Object.assign({}, src, {marker: marker});
+                window.__mlPegActiveTraj = null;
+            } else {
+                data.push({
+                    x: [pt.x],
+                    y: [pt.y],
+                    type: src.type || 'scatter',
+                    mode: 'markers',
+                    name: '__clicked_point__',
+                    xaxis: src.xaxis,
+                    yaxis: src.yaxis,
+                    hoverinfo: 'skip',
+                    showlegend: false,
+                    cliponaxis: false,
+                    marker: {
+                        size: 16,
+                        color: 'rgba(0,0,0,0)',
+                        line: {color: '#ff1493', width: 3},
+                    },
+                });
+                // Record the clicked curve so a playing WEAS trajectory can move
+                // this ring to the matching frame's point (weas_frame_follow.js).
+                window.__mlPegActiveTraj = {
+                    scatterId: "__SCATTER_ID__",
+                    x: src.x || [],
+                    y: src.y || [],
+                    followFrames: __FOLLOW_FRAMES__,
+                };
+            }
+            const out = Object.assign({}, figure, {data: data});
+            // Pin the axes to the live rendered range so adding the ring (a large
+            // marker) can't autorange and resize the plot. Reading _fullLayout
+            // (not the stale State figure) also preserves any current user zoom.
+            const gd = document.getElementById("__SCATTER_ID__");
+            const plot = gd && gd.querySelector('.js-plotly-plot');
+            if (plot && plot._fullLayout) {
+                out.layout = Object.assign({}, figure.layout);
+                // Preserve current legend visibility: adding the ring trace must
+                // not flip Plotly's auto-legend on for plots that have none.
+                out.layout.showlegend = plot._fullLayout.showlegend;
+                const xa = (src.xaxis || 'x').replace('x', 'xaxis');
+                const ya = (src.yaxis || 'y').replace('y', 'yaxis');
+                const flx = plot._fullLayout[xa], fly = plot._fullLayout[ya];
+                if (flx && fly) {
+                    out.layout[xa] = Object.assign(
+                        {}, out.layout[xa], {
+                            type: flx.type,
+                            title: Object.assign(
+                                {}, out.layout[xa] && out.layout[xa].title,
+                                {text: flx.title.text}
+                            ),
+                            range: flx.range.slice(),
+                            autorange: false,
+                        }
+                    );
+                    out.layout[ya] = Object.assign(
+                        {}, out.layout[ya], {
+                            type: fly.type,
+                            title: Object.assign(
+                                {}, out.layout[ya] && out.layout[ya].title,
+                                {text: fly.title.text}
+                            ),
+                            range: fly.range.slice(),
+                            autorange: false,
+                        }
+                    );
+                }
+            }
+            return out;
+        }
+        """.replace("__SCATTER_ID__", scatter_id).replace(
+            "__FOLLOW_FRAMES__", str(follow_frames).lower()
+        ),
+        Output(scatter_id, "figure", allow_duplicate=True),
+        Input(scatter_id, "clickData"),
+        State(scatter_id, "figure"),
+        prevent_initial_call=True,
+    )
+
+
 def plot_from_scatter(
     scatter_id: str,
     plot_id: str,
@@ -184,6 +419,8 @@ def plot_from_scatter(
         List of plots to show, in same order as scatter data.
     """
     register_plot_download_callbacks()
+    register_plot_settings_callbacks()
+    _register_point_highlight(scatter_id)
 
     @callback(
         Output(plot_id, "children", allow_duplicate=True),
@@ -213,11 +450,108 @@ def plot_from_scatter(
         return Div(POINT_HINT, style=INSTRUCTION_STYLE)
 
 
+def _point_label(point: dict) -> str | None:
+    """
+    Get the label a clicked point carries in its ``customdata``.
+
+    Parameters
+    ----------
+    point
+        Clicked data point from a scatter's ``clickData``.
+
+    Returns
+    -------
+    str | None
+        Label stored in ``customdata``, taking the last of several values, or
+        None if the point carries no label.
+    """
+    customdata = point.get("customdata")
+    return customdata[-1] if isinstance(customdata, list) else customdata
+
+
+def plot_from_scatter_files(
+    scatter_id: str,
+    plot_id: str,
+    plot_dir: Path,
+    clear_plot_ids: Sequence[str] = (),
+) -> str:
+    """
+    Attach callback to show a plot read from disk when a scatter point is clicked.
+
+    Unlike `plot_from_scatter`, plots are read from disk on demand rather than
+    pre-loaded into a `plots_list` up front, which would be needlessly expensive
+    for scatters with many points, where only one plot is shown at a time.
+
+    Parameters
+    ----------
+    scatter_id
+        ID for Dash scatter being clicked.
+    plot_id
+        ID for Dash plot placeholder Div where new plot will be rendered.
+    plot_dir
+        Directory of saved plots, named ``<label>.json`` for the label each
+        scatter point carries in its ``customdata``.
+    clear_plot_ids
+        IDs of placeholder Divs to empty when a new plot is shown, so content
+        derived from the previous plot does not linger on screen.
+
+    Returns
+    -------
+    str
+        ID of the rendered `Graph`, so further callbacks, such as
+        `struct_from_scatter`, can be attached to clicks on it.
+    """
+    register_plot_download_callbacks()
+    register_plot_settings_callbacks()
+    _register_point_highlight(scatter_id)
+
+    graph_id = f"{scatter_id}-plot"
+
+    @callback(
+        Output(plot_id, "children", allow_duplicate=True),
+        *[
+            Output(clear_id, "children", allow_duplicate=True)
+            for clear_id in clear_plot_ids
+        ],
+        Input(scatter_id, "clickData"),
+        prevent_initial_call="initial_duplicate",
+    )
+    def show_plot(click_data):
+        """
+        Register callback to show plot read from disk when a point is clicked.
+
+        Parameters
+        ----------
+        click_data
+            Clicked data point in scatter plot.
+
+        Returns
+        -------
+        Div | tuple[Div, ...]
+            Plot on scatter click, followed by an empty Div per ID in
+            ``clear_plot_ids``.
+        """
+        plot = Div(POINT_HINT, style=INSTRUCTION_STYLE)
+
+        if click_data:
+            label = _point_label(click_data["points"][0])
+            plot_path = plot_dir / f"{label}.json"
+            if label is not None and plot_path.exists():
+                plot = plot_with_download_controls(read_plot(plot_path, id=graph_id))
+
+        if not clear_plot_ids:
+            return plot
+        return (plot, *[Div() for _ in clear_plot_ids])
+
+    return graph_id
+
+
 def struct_from_scatter(
     scatter_id: str,
     struct_id: str,
-    structs: str | list[str],
+    structs: str | list[str] | dict[str, str],
     mode: Literal["struct", "traj"] = "struct",
+    follow_frames: bool | None = None,
 ) -> None:
     """
     Attach callback to show a structure when a scatter point is clicked.
@@ -229,11 +563,21 @@ def struct_from_scatter(
     struct_id
         ID for Dash plot placeholder Div where structures will be visualised.
     structs
-        List of structure filenames in same order as scatter data to be visualised.
+        Structure trajectory, list of filenames in scatter-point order, or mapping
+        from labels stored in point ``customdata`` to structure filenames.
     mode
         Whether to display a single structure ("struct"), or trajectory from an initial
         image ("traj"). Default is "struct".
+    follow_frames
+        Whether stepping through a WEAS trajectory moves the scatter highlight to
+        the point with the same index. If None (default), following is enabled
+        only for a single shared trajectory file. This is for e.g. a NEB, whereas a list
+        of per-point files, including density-cell structure collections, keeps
+        the highlight on the clicked point. Set explicitly to override.
     """
+    if follow_frames is None:
+        follow_frames = mode == "traj" and isinstance(structs, str)
+    _register_point_highlight(scatter_id, follow_frames=follow_frames)
 
     @callback(
         Output(struct_id, "children", allow_duplicate=True),
@@ -256,11 +600,17 @@ def struct_from_scatter(
         """
         if not click_data:
             return Div()
-        idx = click_data["points"][0]["pointNumber"]
+        point = click_data["points"][0]
+        idx = point["pointNumber"]
 
         if isinstance(structs, str):
             struct = structs
             index = idx
+        elif isinstance(structs, dict):
+            struct = structs.get(_point_label(point))
+            if struct is None:
+                return Div(POINT_HINT, style=INSTRUCTION_STYLE)
+            index = idx if mode == "traj" else 0
         else:
             struct = structs[idx]
             index = 0
@@ -271,7 +621,7 @@ def struct_from_scatter(
                 style={
                     "height": "550px",
                     "width": "100%",
-                    "border": "1px solid #ddd",
+                    "border": "1px solid var(--mlpeg-border)",
                     "borderRadius": "5px",
                 },
             )
@@ -283,6 +633,7 @@ def struct_from_multi_scatters(
     struct_id: str,
     structs: list[str] | list[list[str]],
     mode: Literal["struct", "traj"] = "struct",
+    follow_frames: bool = True,
 ) -> None:
     """
     Attach callback to show a structure when a multiline scatter point is clicked.
@@ -304,6 +655,9 @@ def struct_from_multi_scatters(
     mode
         Whether to display a single structure ("struct"), or trajectory from an initial
         image ("traj"). Default is "struct".
+    follow_frames
+        Whether stepping through a WEAS trajectory moves the scatter highlight to
+        the point with the same index. Default is True.
 
     Examples
     --------
@@ -317,6 +671,7 @@ def struct_from_multi_scatters(
     When the `i`th data point of the `j`th curve of "test-figure" is clicked,
     `structs[j][i]` will be rendered in the "test-placeholder" Div.
     """
+    _register_point_highlight(scatter_id, follow_frames=follow_frames)
 
     @callback(
         Output(struct_id, "children", allow_duplicate=True),
@@ -355,7 +710,7 @@ def struct_from_multi_scatters(
                 style={
                     "height": "550px",
                     "width": "100%",
-                    "border": "1px solid #ddd",
+                    "border": "1px solid var(--mlpeg-border)",
                     "borderRadius": "5px",
                 },
             )
@@ -421,7 +776,7 @@ def struct_from_table(
                         style={
                             "height": "550px",
                             "width": "100%",
-                            "border": "1px solid #ddd",
+                            "border": "1px solid var(--mlpeg-border)",
                             "borderRadius": "5px",
                         },
                     )
@@ -429,352 +784,6 @@ def struct_from_table(
 
             raise PreventUpdate
         raise ValueError("Invalid column_id")
-
-
-def register_image_gallery_callbacks(
-    model_dropdown_id: str,
-    element_dropdown_id: str,
-    figure_id: str,
-    manifest_dir: str | Path,
-    curve_dir: str | Path,
-    overview_label: str = "All",
-) -> None:
-    """
-    Register callbacks to display pre-rendered images stored per model.
-
-    Parameters
-    ----------
-    model_dropdown_id
-        Dash component ID for the model selector.
-    element_dropdown_id
-        Dash component ID for the element selector.
-    figure_id
-        Dash component ID for the output ``dcc.Graph``.
-    manifest_dir
-        Directory containing per-model ``manifest.json`` files.
-    curve_dir
-        Directory of per-model curve JSON payloads. Element selections are rendered on
-        the fly from these payloads instead of relying on pre-generated element images.
-    overview_label
-        Dropdown label representing the overview image. Default is ``"All"``.
-    """
-    curve_base = Path(curve_dir) if curve_dir else None
-
-    def _data_url(path: Path) -> tuple[str, float, float]:
-        """
-        Convert an image file into a base64 data URL.
-
-        Parameters
-        ----------
-        path
-            Path to the image file.
-
-        Returns
-        -------
-        tuple[str, float, float]
-            Data URL string suitable for Plotly layout images, plus image width/height
-            (falls back to ``1.0`` when unavailable).
-        """
-        width, height = 1.0, 1.0
-        suffix = path.suffix.lower()
-        try:
-            from PIL import Image
-
-            with Image.open(path) as im:
-                width, height = float(im.width), float(im.height)
-        except Exception:
-            if suffix == ".svg":
-                try:
-                    import xml.etree.ElementTree as ET
-
-                    root = ET.fromstring(path.read_text())
-                    viewbox = root.attrib.get("viewBox")
-                    if viewbox:
-                        parts = [float(v) for v in viewbox.strip().split()[-2:]]
-                        if len(parts) == 2:
-                            width, height = parts
-                    else:
-                        w_attr = root.attrib.get("width")
-                        h_attr = root.attrib.get("height")
-                        if w_attr and h_attr:
-                            width = float(str(w_attr).replace("px", ""))
-                            height = float(str(h_attr).replace("px", ""))
-                except Exception:
-                    width, height = 1.0, 1.0
-            else:
-                width, height = 1.0, 1.0
-        mime = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".svg": "image/svg+xml",
-        }.get(suffix, "application/octet-stream")
-        encoded = base64.b64encode(path.read_bytes()).decode()
-        return f"data:{mime};base64,{encoded}", width, height
-
-    def _data_url_from_bytes(
-        data: bytes, mime: str = "image/png"
-    ) -> tuple[str, float, float]:
-        """
-        Build a data URL from raw bytes and infer image dimensions.
-
-        Parameters
-        ----------
-        data
-            Raw image bytes.
-        mime
-            MIME type string for the encoded image.
-
-        Returns
-        -------
-        tuple[str, float, float]
-            Data URL string and inferred image width/height (falls back to 1.0).
-        """
-        width, height = 1.0, 1.0
-        try:
-            from PIL import Image
-
-            with Image.open(io.BytesIO(data)) as im:
-                width, height = float(im.width), float(im.height)
-        except Exception:
-            pass
-        encoded = base64.b64encode(data).decode()
-        return f"data:{mime};base64,{encoded}", width, height
-
-    def _image_figure(src: str, width: float, height: float) -> go.Figure:
-        """
-        Build a Plotly figure that displays the supplied image.
-
-        Parameters
-        ----------
-        src
-            Base64-encoded data URL for the image.
-        width
-            Image width in pixels (used for aspect ratio).
-        height
-            Image height in pixels (used for aspect ratio).
-
-        Returns
-        -------
-        go.Figure
-            Figure containing the image without axes, matching legacy behaviour.
-        """
-        aspect = width / height if height else 1.0
-        aspect = aspect if math.isfinite(aspect) and aspect > 0 else 1.0
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=[0, aspect],
-                y=[0, 1],
-                mode="markers",
-                marker={"opacity": 0},
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-        fig.add_layout_image(
-            {
-                "source": src,
-                "xref": "x",
-                "yref": "y",
-                "x": 0,
-                "y": 0,
-                "sizex": aspect,
-                "sizey": 1,
-                "xanchor": "left",
-                "yanchor": "bottom",
-                "layer": "below",
-            }
-        )
-        fig.update_layout(
-            xaxis={
-                "visible": False,
-                "range": [0, aspect],
-                "constrain": "domain",
-            },
-            yaxis={
-                "visible": False,
-                "range": [0, 1],
-                "scaleanchor": "x",
-                "scaleratio": 1,
-            },
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            autosize=True,
-            dragmode="pan",
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
-        return fig
-
-    @callback(
-        Output(element_dropdown_id, "options"),
-        Output(element_dropdown_id, "value"),
-        Input(model_dropdown_id, "value"),
-    )
-    def _update_options(model_name: str):
-        """
-        Populate element dropdown options for the selected model.
-
-        Parameters
-        ----------
-        model_name
-            Selected model value from the dropdown.
-
-        Returns
-        -------
-        tuple[list[dict], str]
-            Dropdown options and default selection.
-        """
-        if not model_name:
-            raise PreventUpdate
-        element_opts: list[str] = []
-        model_curve_dir = curve_base / model_name
-        if model_curve_dir.exists():
-            for curve_file in model_curve_dir.glob("*.json"):
-                try:
-                    payload = json.loads(curve_file.read_text())
-                except Exception:
-                    continue
-                pair = payload.get("pair") or curve_file.stem
-                try:
-                    first, second = pair.split("-")
-                except ValueError:
-                    first = second = pair
-                element_opts.extend([first, second])
-
-        options = [{"label": overview_label, "value": overview_label}] + [
-            {"label": element, "value": element}
-            for element in sorted({opt for opt in element_opts if opt})
-        ]
-        return options, overview_label
-
-    @callback(
-        Output(figure_id, "figure"),
-        Input(model_dropdown_id, "value"),
-        Input(element_dropdown_id, "value"),
-    )
-    def _update_figure(model_name: str, element_value: str | None):
-        """
-        Return figure for overview or selected-element view.
-
-        Parameters
-        ----------
-        model_name
-            Selected model identifier.
-        element_value
-            Selected element dropdown value (overview label or element symbol).
-
-        Returns
-        -------
-        go.Figure
-            Image figure ready for display.
-        """
-        if not model_name:
-            raise PreventUpdate
-
-        model_curve_dir = curve_base / model_name
-        if not model_curve_dir.exists():
-            raise PreventUpdate
-
-        curves: dict[str, dict] = {}
-        for curve_file in model_curve_dir.glob("*.json"):
-            try:
-                payload = json.loads(curve_file.read_text())
-            except Exception:
-                continue
-            pair = payload.get("pair") or curve_file.stem
-            curves[pair] = payload
-
-        if not curves:
-            raise PreventUpdate
-
-        # Decide which pairs to render: overview -> homonuclear only, otherwise
-        # all pairs involving the selected element.
-        selected_element = None if element_value == overview_label else element_value
-        filtered: dict[str, dict] = {}
-        for pair, payload in curves.items():
-            try:
-                first, second = pair.split("-")
-            except ValueError:
-                first = second = pair
-            if selected_element is None:
-                if first == second:
-                    filtered[pair] = payload
-            else:
-                if selected_element in (first, second):
-                    filtered[pair] = payload
-
-        if not filtered:
-            raise PreventUpdate
-
-        import matplotlib as mpl
-
-        # Ensure a non-interactive backend for server-side rendering
-        try:
-            mpl.use("Agg")
-        except Exception:
-            pass
-
-        fig, axes = plt.subplots(
-            PERIODIC_TABLE_ROWS,
-            PERIODIC_TABLE_COLS,
-            figsize=(30, 15),
-            constrained_layout=True,
-        )
-        axes = axes.reshape(PERIODIC_TABLE_ROWS, PERIODIC_TABLE_COLS)
-        for ax in axes.ravel():
-            ax.axis("off")
-
-        has_data = False
-        for pair, payload in filtered.items():
-            first, second = pair.split("-") if "-" in pair else (pair, pair)
-            other = second if selected_element == first else first
-            pos = PERIODIC_TABLE_POSITIONS.get(other)
-            if pos is None:
-                continue
-            x_vals = payload.get("distance") or []
-            y_vals = payload.get("energy") or []
-            if not x_vals or not y_vals:
-                continue
-            try:
-                x = [float(v) for v in x_vals]
-                y = [float(v) for v in y_vals]
-            except Exception:
-                continue
-
-            shift = y[-1]
-            y_shifted = [yy - shift for yy in y]
-            row, col = pos
-            ax = axes[row, col]
-            ax.axis("on")
-            ax.plot(x, y_shifted, linewidth=1, zorder=1)
-            ax.axhline(0, color="grey", linewidth=0.5, zorder=0)
-            ax.set_title(f"{first}-{second}, shift: {shift:.4f}", fontsize=8)
-            ax.set_xticks([0, 2, 4, 6])
-            ax.set_yticks([-20, -10, 0, 10, 20])
-            ax.set_xlim(0, 6)
-            ax.set_ylim(-20, 20)
-            if selected_element and (first == second == selected_element):
-                for spine in ax.spines.values():
-                    spine.set_edgecolor("crimson")
-                    spine.set_linewidth(2)
-            has_data = True
-
-        if not has_data:
-            plt.close(fig)
-            raise PreventUpdate
-
-        title = (
-            f"Heteronuclear diatomics for {selected_element}: {model_name}"
-            if selected_element
-            else f"Homonuclear diatomics: {model_name}"
-        )
-        fig.suptitle(title, fontsize=32, fontweight="bold")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=200)
-        plt.close(fig)
-        src, width, height = _data_url_from_bytes(buf.getvalue(), mime="image/png")
-        return _image_figure(src, width, height)
 
 
 def scatter_and_assets_from_table(
@@ -816,6 +825,7 @@ def scatter_and_assets_from_table(
         Key in ``table_data`` used to look up the model display name.
     """
     register_plot_download_callbacks()
+    register_plot_settings_callbacks()
 
     @callback(
         Output(plot_container_id, "children"),
@@ -882,8 +892,13 @@ def scatter_and_assets_from_table(
         if not result:
             raise PreventUpdate
         content, metadata = result
-
-        content = Div([build_plot_download_controls(scatter_id), content])
+        content = Div(
+            [
+                build_plot_download_controls(scatter_id),
+                build_plot_settings_controls(scatter_id),
+                content,
+            ]
+        )
 
         return content, metadata, active_cell, None
 
@@ -918,6 +933,7 @@ def model_asset_from_scatter(
     missing_message
         Message shown when no asset can be produced for the click event.
     """
+    _register_point_highlight(scatter_id)
 
     @callback(
         Output(asset_container_id, "children"),

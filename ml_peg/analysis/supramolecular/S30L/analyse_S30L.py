@@ -21,7 +21,7 @@ from ml_peg.models import current_models
 from ml_peg.models.get_models import get_model_names
 
 MODELS = get_model_names(current_models)
-DISPERSION_NAME_MAP = build_dispersion_name_map(MODELS)
+DISPERSION_NAME_MAP = build_dispersion_name_map()
 
 CALC_PATH = CALCS_ROOT / "supramolecular" / "S30L" / "outputs"
 OUT_PATH = APP_ROOT / "data" / "supramolecular" / "S30L"
@@ -241,6 +241,7 @@ def metrics(
     }
 
 
+@pytest.mark.framework("mace-multihead", "mace-polar-1")
 def test_s30l(metrics: dict[str, dict]) -> None:
     """
     Run S30L test.

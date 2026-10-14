@@ -8,6 +8,7 @@ from pathlib import Path
 from dash import Dash
 
 from ml_peg.app.build_app import build_full_app
+from ml_peg.app.utils.head_scripts import analytics_scripts, inject_head_scripts
 
 DATA_PATH = Path(__file__).parent / "data"
 
@@ -34,7 +35,20 @@ app = Dash(
     assets_folder=DATA_PATH,
     title="ML-PEG",  # set browser tab title
     update_title=None,  # prevent the tab changing to Updating... during callbacks
+    external_scripts=analytics_scripts(),
+    # Benchmark cards mount their bodies lazily, so their control ids are absent
+    # from the initial layout; allow callbacks to reference not-yet-present ids.
+    suppress_callback_exceptions=True,
+    meta_tags=[
+        # Render at real device width so the responsive layout + media queries
+        # apply on phones (without this, mobile browsers assume a ~980px page).
+        {"name": "viewport", "content": "width=device-width, initial-scale=1"},
+    ],
 )
+
+# Apply the saved preferences before first paint so a reload doesn't flash the
+# wrong theme, zoom or font while Dash hydrates (see utils/head_scripts.py).
+inject_head_scripts(app)
 
 # Only build app when in production, otherwise run_app's layout is missing
 if bool(os.environ.get("ML_PEG_PROD", False)):

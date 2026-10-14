@@ -136,11 +136,16 @@ def load_models(
         Loaded models from models.yml and/or loaded mock model.
     """
     from ml_peg.models.models import (
+        DpaCalc,
         FairChemCalc,
         GenericASECalc,
+        GraceCalc,
+        MatterSimCalc,
         MockCalc,
         OrbCalc,
-        PetMadCalc,
+        SevenNetCalc,
+        UPETCalc,
+        VivaceCalc,
     )
 
     if run_mock is None:
@@ -162,6 +167,12 @@ def load_models(
         print(f"Loading model from {filepath}: {name}")
 
         match cfg["class_name"]:
+            case "DP":
+                loaded_models[name] = DpaCalc(
+                    kwargs=cfg.get("kwargs", {}),
+                    trained_on_dispersion=cfg.get("trained_on_dispersion", False),
+                    dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
+                )
             case "FAIRChemCalculator":
                 kwargs = cfg.get("kwargs", {})
                 loaded_models[name] = FairChemCalc(
@@ -169,6 +180,7 @@ def load_models(
                     task_name=kwargs.get("task_name", "omat"),
                     device=cfg.get("device", "cpu"),
                     overrides=kwargs.get("overrides", {}),
+                    default_dtype=cfg.get("overwrite_dtype", None),
                     trained_on_dispersion=cfg.get("trained_on_dispersion", False),
                     dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
                 )
@@ -191,8 +203,8 @@ def load_models(
                     trained_on_dispersion=cfg.get("trained_on_dispersion", False),
                     dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
                 )
-            case "PETMADCalculator":
-                loaded_models[name] = PetMadCalc(
+            case "MatterSimCalculator":
+                loaded_models[name] = MatterSimCalc(
                     module=cfg["module"],
                     class_name=cfg["class_name"],
                     device=cfg.get("device", "cpu"),
@@ -201,11 +213,46 @@ def load_models(
                     trained_on_dispersion=cfg.get("trained_on_dispersion", False),
                     dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
                 )
+            case "UPETCalculator":
+                loaded_models[name] = UPETCalc(
+                    module=cfg["module"],
+                    class_name=cfg["class_name"],
+                    device=cfg.get("device", "cpu"),
+                    default_dtype=cfg.get("overwrite_dtype", None),
+                    kwargs=cfg.get("kwargs", {}),
+                    trained_on_dispersion=cfg.get("trained_on_dispersion", False),
+                    dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
+                )
+            case "SevenNetCalculator":
+                loaded_models[name] = SevenNetCalc(
+                    device=cfg.get("device", "cpu"),
+                    kwargs=cfg.get("kwargs", {}),
+                    trained_on_dispersion=cfg.get("trained_on_dispersion", False),
+                    dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
+                )
+            case "MLFFCalculator":
+                loaded_models[name] = VivaceCalc(
+                    device=cfg.get("device", "auto"),
+                    kwargs=cfg.get("kwargs", {}),
+                    trained_on_dispersion=cfg.get("trained_on_dispersion", False),
+                    dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
+                )
+            case "grace_fm":
+                loaded_models[name] = GraceCalc(
+                    module=cfg["module"],
+                    class_name=cfg["class_name"],
+                    device=cfg.get("device", "cpu"),
+                    kwargs=cfg.get("kwargs", {}),
+                    trained_on_dispersion=cfg.get("trained_on_dispersion", False),
+                    dispersion_kwargs=cfg.get("dispersion_kwargs", {}),
+                    default_dtype=cfg.get("overwrite_dtype", None),
+                )
             case _:
                 loaded_models[name] = GenericASECalc(
                     module=cfg["module"],
                     class_name=cfg["class_name"],
                     device=cfg.get("device", "auto"),
+                    default_dtype=cfg.get("overwrite_dtype", None),
                     kwargs=cfg.get("kwargs", {}),
                     trained_on_dispersion=cfg.get("trained_on_dispersion", False),
                     dispersion_kwargs=cfg.get("dispersion_kwargs", {}),

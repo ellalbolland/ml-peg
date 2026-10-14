@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import warnings
 
-from dash import Dash
 from dash.html import Div
 
 from ml_peg.app import APP_ROOT
@@ -76,17 +75,5 @@ def get_app() -> X23App:
             Div(id=f"{BENCHMARK_NAME}-struct-placeholder"),
         ],
         info_path=INFO_PATH,
+        framework_ids=["mace-multihead", "mace-polar-1", "mace-mp"],
     )
-
-
-if __name__ == "__main__":
-    # Create Dash app
-    full_app = Dash(__name__, assets_folder=DATA_PATH.parent.parent)
-
-    # Construct layout and register callbacks
-    x23_app = get_app()
-    full_app.layout = x23_app.layout
-    x23_app.register_callbacks()
-
-    # Run app
-    full_app.run(port=8053, debug=True)

@@ -22,7 +22,7 @@ from ml_peg.models import current_models
 from ml_peg.models.get_models import get_model_names
 
 MODELS = get_model_names(current_models)
-DISPERSION_NAME_MAP = build_dispersion_name_map(MODELS)
+DISPERSION_NAME_MAP = build_dispersion_name_map()
 CALC_PATH = CALCS_ROOT / "molecular" / "GMTKN55" / "outputs"
 OUT_PATH = APP_ROOT / "data" / "molecular" / "GMTKN55"
 
@@ -97,6 +97,14 @@ def structure_info() -> dict[str, dict[str, float] | list | NDArray]:
 
 INFO = structure_info()
 
+_CATEGORY_LABELS = {
+    "Basic properties and reaction energies for small systems": "Small systems",
+    "Intermolecular noncovalent interactions": "Intermolecular NCIs",
+    "Intramolecular noncovalent interactions": "Intramolecular NCIs",
+    "Reaction barrier heights": "Barrier heights",
+    "Reaction energies for large systems and isomerisation reactions": "Large systems",
+}
+
 
 @pytest.fixture
 @plot_parity(
@@ -110,6 +118,8 @@ INFO = structure_info()
         "System": INFO["systems"],
         "Excluded": INFO["excluded"],
     },
+    symbol_by=INFO["categories"].tolist(),
+    symbol_labels=_CATEGORY_LABELS,
 )
 def rel_energies() -> dict[str, list[float]]:
     """
@@ -342,6 +352,7 @@ def metrics(
     return metrics | {"WTMAD": weighted_error}
 
 
+@pytest.mark.framework("mace-multihead")
 def test_gmtkn55(metrics):
     """
     Run GMTKN55 test.

@@ -11,6 +11,7 @@ from ase.io import read, write
 import mlipx
 from mlipx.abc import NodeWithCalculator
 import numpy as np
+import pytest
 from tqdm import tqdm
 import zntrack
 
@@ -149,6 +150,10 @@ class LNCI16Benchmark(zntrack.Node):
         guest_atoms.info.update(
             {"charge": guest_charge, "system": system_name, "spin": 1}
         )
+
+        complex_atoms.positions -= np.mean(complex_atoms.positions, axis=0)
+        host_atoms.positions -= np.mean(host_atoms.positions, axis=0)
+        guest_atoms.positions -= np.mean(guest_atoms.positions, axis=0)
 
         return {
             "complex": complex_atoms,
@@ -321,6 +326,7 @@ def build_project(repro: bool = False) -> None:
         project.build()
 
 
+@pytest.mark.fast
 def test_lnci16():
     """Run LNCI16 benchmark via pytest."""
     build_project(repro=True)

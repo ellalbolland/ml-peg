@@ -11,6 +11,7 @@ from ase.io import read, write
 import mlipx
 from mlipx.abc import NodeWithCalculator
 import numpy as np
+import pytest
 from tqdm import tqdm
 import zntrack
 
@@ -285,6 +286,8 @@ def build_project(repro: bool = False) -> None:
         project.build()
 
 
+@pytest.mark.framework("mace-multihead", "mace-polar-1")
+@pytest.mark.fast
 def test_s30l():
     """Run S30L benchmark via pytest."""
     build_project(repro=True)

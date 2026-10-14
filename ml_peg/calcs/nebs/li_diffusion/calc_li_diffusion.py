@@ -61,7 +61,7 @@ def relaxed_structs() -> dict[str, Atoms]:
     return relaxed_structs
 
 
-@pytest.mark.slow
+@pytest.mark.fast
 @pytest.mark.parametrize("model_name", MODELS)
 def test_li_diffusion_b(relaxed_structs: dict[str, Atoms], model_name: str) -> None:
     """
@@ -96,7 +96,7 @@ def test_li_diffusion_b(relaxed_structs: dict[str, Atoms], model_name: str) -> N
             image.info.setdefault("spin", 1)
         neb.run()
     except Exception as e:
-        print(f"Error running NEB for {model_name} path B: {e}")
+        warn(f"Error running NEB for {model_name} path B: {e}", stacklevel=2)
         # Write out equivalent data
         out_dir = OUT_PATH / model_name
         out_dir.mkdir(exist_ok=True, parents=True)
@@ -108,7 +108,7 @@ def test_li_diffusion_b(relaxed_structs: dict[str, Atoms], model_name: str) -> N
             print(np.nan, np.nan, np.nan, file=out)
 
 
-@pytest.mark.slow
+@pytest.mark.fast
 @pytest.mark.parametrize("model_name", MODELS)
 def test_li_diffusion_c(relaxed_structs: dict[str, Atoms], model_name: str) -> None:
     """
@@ -143,7 +143,7 @@ def test_li_diffusion_c(relaxed_structs: dict[str, Atoms], model_name: str) -> N
             image.info.setdefault("spin", 1)
         neb.run()
     except Exception as e:
-        print(f"Error running NEB for {model_name} path C: {e}")
+        warn(f"Error running NEB for {model_name} path C: {e}", stacklevel=2)
         # Write out equivalent data
         out_dir = OUT_PATH / model_name
         out_dir.mkdir(exist_ok=True, parents=True)

@@ -21,7 +21,7 @@ from ml_peg.models import current_models
 from ml_peg.models.get_models import load_models
 
 MODELS = load_models(current_models)
-DISPERSION_NAME_MAP = build_dispersion_name_map(MODELS)
+DISPERSION_NAME_MAP = build_dispersion_name_map()
 
 CALC_PATH = CALCS_ROOT / "supramolecular" / "PLF547" / "outputs"
 OUT_PATH = APP_ROOT / "data" / "supramolecular" / "PLF547"
@@ -215,6 +215,7 @@ def metrics(
     }
 
 
+@pytest.mark.framework("mace-multihead", "mace-polar-1")
 def test_plf547(metrics: dict[str, dict]) -> None:
     """
     Run PLF547 test.

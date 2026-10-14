@@ -8,7 +8,7 @@ from functools import lru_cache
 import json
 from numbers import Number
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
 import dash.dash_table.Format as TableFormat
 from matplotlib import colormaps
@@ -17,6 +17,17 @@ import yaml
 
 from ml_peg.models import MODELS_ROOT
 from ml_peg.models.get_models import get_model_names
+
+RESERVED_TABLE_COLUMNS = ("MLIP", "Score", "id", "link")
+# Single source of truth for the default table colour scheme. Referenced by the
+# colour-scheme dropdown, its backing store, and every ``cmap_name or ...``
+# fallback so the shown scheme and the cell colouring can never disagree.
+DEFAULT_COLORMAP = "viridis_r"
+
+# The overall summary table's component id, shared by the builders and the
+# callback registrations that special-case it (link column, header padding,
+# score-store prefix).
+SUMMARY_TABLE_ID = "summary-table"
 
 
 class ThresholdEntry(TypedDict):
@@ -96,16 +107,16 @@ def colour_from_cmap(cmap_name: str | None, position: float) -> str:
         CSS ``rgb(...)`` colour string.
     """
     try:
-        cmap = colormaps[cmap_name or "viridis_r"]
+        cmap = colormaps[cmap_name or DEFAULT_COLORMAP]
     except KeyError:
-        cmap = colormaps["viridis_r"]
+        cmap = colormaps[DEFAULT_COLORMAP]
 
     clamped = min(max(position, 0.0), 1.0)
     rgb = tuple(int(255 * channel) for channel in cmap(clamped)[:3])
     return f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
 
 
-def get_threshold_colours(cmap_name: str | None = "viridis_r") -> dict[str, str]:
+def get_threshold_colours(cmap_name: str | None = DEFAULT_COLORMAP) -> dict[str, str]:
     """
     Get good/bad threshold colours for the active table colormap.
 
@@ -142,26 +153,65 @@ def build_threshold_input_style(border_colour: str) -> dict[str, str]:
     dict[str, str]
         Inline Dash style dictionary.
     """
+    # The good/bad colour is dynamic (follows the colormap), so pass it to the
+    # inner <input>'s border via an inherited CSS variable rather than drawing a
+    # second box on the .dash-input-container wrapper (see theme.css).
     return {
-        "width": "60px",
+        "width": "54px",
         "fontSize": "12px",
         "padding": "2px 4px",
-        "border": f"2px solid {border_colour}",
-        "borderRadius": "3px",
         "boxSizing": "border-box",
         "margin": "0 auto",
         "display": "block",
+        "--mlpeg-input-border": border_colour,
     }
 
 
-class FrameworkEntry(TypedDict):
-    """Style and link metadata for benchmark framework attribution badges."""
+def weight_input_style() -> dict[str, str]:
+    """
+    Build the inline style for a metric weight input.
+
+    Returns
+    -------
+    dict[str, str]
+        Inline Dash style dictionary.
+    """
+    # No border/radius here: dcc.Input wraps the <input> in a
+    # .dash-input-container, and the inner <input> already draws the box (see
+    # theme.css). Styling this wrapper too gave a redundant box-in-a-box.
+    return {
+        "width": "54px",
+        "fontSize": "12px",
+        "padding": "2px 4px",
+        "textAlign": "center",
+    }
+
+
+class _FrameworkEntryRequired(TypedDict):
+    """Keys always present in a framework attribution badge entry."""
 
     label: str
+    type: str
     color: str
     text_color: str
-    url: NotRequired[str]
-    logo: NotRequired[str]
+
+
+class FrameworkEntry(_FrameworkEntryRequired, total=False):
+    """
+    Style and link metadata for benchmark framework attribution badges.
+
+    Inherits the required style keys and adds the optional link, hover and
+    description metadata, which individual frameworks may omit.
+    """
+
+    url: str
+    logo: str
+    icon: str
+    tooltip: str
+    description: str
+    project_url: str
+    paper_url: str
+    github: str
 
 
 def get_mlip_column_width(
@@ -274,18 +324,77 @@ def is_numeric_column(rows: list[dict], column_id: str) -> bool:
     return False
 
 
-def sig_fig_format() -> TableFormat.Format:
+# Decimal places for table numbers: enough for the column's smallest non-zero
+# value to keep this many significant figures, within these bounds.
+TABLE_SIG_FIGS = 3
+MAX_TABLE_DECIMALS = 4
+DEFAULT_TABLE_DECIMALS = 2
+
+
+def column_decimals(values: Sequence[object]) -> int:
     """
-    Build a formatter that displays three significant figures.
+    Choose one decimal count for a table column.
+
+    Every value in a column is shown with the same number of decimals, chosen so
+    the smallest non-zero magnitude still shows ``TABLE_SIG_FIGS`` significant
+    figures (e.g. 11.000 alongside 0.355, not 11.0 alongside 0.355).
+
+    Parameters
+    ----------
+    values
+        Column values. Non-numeric entries (``"NaN"``, ``None``) and zeros are
+        ignored, as they carry no scale information.
 
     Returns
     -------
-    TableFormat.Format
-        Dash table format configured for three significant figures.
+    int
+        Decimal places, between 0 and ``MAX_TABLE_DECIMALS``.
     """
-    return TableFormat.Format(precision=3).scheme(
-        TableFormat.Scheme.decimal_or_exponent
-    )
+    magnitudes = [
+        abs(value)
+        for value in values
+        if isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and np.isfinite(value)
+        and value != 0
+    ]
+    if not magnitudes:
+        return DEFAULT_TABLE_DECIMALS
+    leading = int(np.floor(np.log10(min(magnitudes))))
+    return int(np.clip(TABLE_SIG_FIGS - 1 - leading, 0, MAX_TABLE_DECIMALS))
+
+
+def apply_column_decimals(
+    columns: Sequence[Mapping[str, object]],
+    rows: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """
+    Give each numeric column a fixed decimal format based on its values.
+
+    Parameters
+    ----------
+    columns
+        DataTable column definitions. Only ``type: "numeric"`` columns change.
+    rows
+        Rows the table will display, used to pick each column's decimals.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Copies of the column definitions with ``format`` set on numeric columns.
+    """
+    rows = rows or []
+    updated = []
+    for column in columns:
+        column_copy = dict(column)
+        if column_copy.get("type") == "numeric":
+            column_id = column_copy.get("id")
+            decimals = column_decimals([row.get(column_id) for row in rows])
+            column_copy["format"] = TableFormat.Format(
+                precision=decimals, scheme=TableFormat.Scheme.fixed
+            )
+        updated.append(column_copy)
+    return updated
 
 
 def clean_thresholds(
@@ -430,6 +539,52 @@ def filter_rows_by_models(
         for row in rows
         if (row.get("MLIP") in selected) or (row.get("id") in selected)
     ]
+
+
+def row_has_no_results(row: dict[str, str | float | None]) -> bool:
+    """
+    Check whether a table row has no result in any metric column.
+
+    Parameters
+    ----------
+    row
+        Table row to check.
+
+    Returns
+    -------
+    bool
+        `True` if no metric column holds a value, otherwise `False`.
+    """
+    for key, value in row.items():
+        if key in RESERVED_TABLE_COLUMNS:
+            continue
+        if value is None or value == "NaN" or value == "":
+            continue
+        if isinstance(value, float) and np.isnan(value):
+            continue
+        return False
+    return True
+
+
+def drop_empty_model_rows(
+    rows: list[dict[str, str | float | None]] | None,
+) -> list[dict[str, str | float | None]]:
+    """
+    Drop model rows if no metric column has a value.
+
+    Parameters
+    ----------
+    rows
+        Table rows to be filtered.
+
+    Returns
+    -------
+    list[dict[str, str | float | None]]
+        Filtered rows that have at least one metric result.
+    """
+    if not rows:
+        return []
+    return [row for row in rows if not row_has_no_results(row)]
 
 
 def get_scores(
@@ -924,7 +1079,6 @@ def format_metric_columns(
         return None
 
     thresholds = thresholds or {}
-    reserved = {"MLIP", "Score", "id", "link"}
     updated_columns: list[dict[str, object]] = []
 
     for column in columns:
@@ -933,7 +1087,7 @@ def format_metric_columns(
 
         if (
             not isinstance(column_id, str)
-            or column_id in reserved
+            or column_id in RESERVED_TABLE_COLUMNS
             or column_id not in thresholds
         ):
             updated_columns.append(column_copy)
@@ -1006,11 +1160,10 @@ def format_tooltip_headers(
         return None
 
     thresholds = thresholds or {}
-    reserved = {"MLIP", "Score", "id", "link"}
 
     updated: dict[str, Any] = {}
     for key, entry in tooltip_header.items():
-        if key in reserved:
+        if key in RESERVED_TABLE_COLUMNS:
             updated[key] = entry
             continue
 
@@ -1128,8 +1281,16 @@ def load_framework_registry() -> dict[str, FrameworkEntry]:
                 "'label', 'color', or 'text_color' values."
             )
 
+        entry_type = raw_entry.get("type")
+        entry_type = (
+            entry_type.strip()
+            if isinstance(entry_type, str) and entry_type.strip()
+            else "framework"
+        )
+
         registry_entry: FrameworkEntry = {
             "label": label,
+            "type": entry_type,
             "color": color,
             "text_color": text_color,
         }
@@ -1140,6 +1301,16 @@ def load_framework_registry() -> dict[str, FrameworkEntry]:
         logo = raw_entry.get("logo")
         if isinstance(logo, str) and logo.strip():
             registry_entry["logo"] = logo.strip()
+        icon = raw_entry.get("icon")
+        if isinstance(icon, str) and icon.strip():
+            registry_entry["icon"] = icon.strip()
+        tooltip = raw_entry.get("tooltip")
+        if isinstance(tooltip, str) and tooltip.strip():
+            registry_entry["tooltip"] = tooltip.strip()
+        for key in ("description", "project_url", "paper_url", "github"):
+            value = raw_entry.get(key)
+            if isinstance(value, str) and value.strip():
+                registry_entry[key] = value.strip()
 
         registry[normalized_id] = registry_entry
 
@@ -1175,3 +1346,22 @@ def get_framework_config(framework_id: str) -> FrameworkEntry:
             f"Unknown framework identifier '{normalized_id}'. "
             f"Known framework IDs: {known_ids}."
         ) from exc
+
+
+def framework_sort_key(framework_id: str) -> tuple[int, str]:
+    """
+    Sort key ordering frameworks before papers, alphabetically by label within each.
+
+    Parameters
+    ----------
+    framework_id
+        Framework identifier from benchmark app metadata.
+
+    Returns
+    -------
+    tuple[int, str]
+        Group rank (0 for frameworks, 1 for papers) and lowercased label.
+    """
+    config = get_framework_config(framework_id)
+    is_paper = config.get("type") == "paper"
+    return (1 if is_paper else 0, config["label"].casefold())

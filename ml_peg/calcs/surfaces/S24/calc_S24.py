@@ -12,6 +12,7 @@ from ase.io import read, write
 import mlipx
 from mlipx.abc import NodeWithCalculator
 import numpy as np
+import pytest
 from tqdm import tqdm
 import zntrack
 
@@ -242,6 +243,8 @@ def build_project(repro: bool = False) -> None:
         project.build()
 
 
+@pytest.mark.framework("mace-multihead", "mace-mp")
+@pytest.mark.fast
 def test_s24():
     """Run S24 benchmark via pytest."""
     build_project(repro=True)

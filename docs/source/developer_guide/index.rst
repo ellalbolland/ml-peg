@@ -7,8 +7,10 @@ Developer guide
 
     get_started
     llm_agent_integration
+    vibecoding
     cli
     add_benchmarks
+    add_interactivity
     add_category
     running
     data

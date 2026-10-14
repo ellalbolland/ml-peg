@@ -26,7 +26,7 @@ from ml_peg.models import current_models
 from ml_peg.models.get_models import load_models
 
 MODELS = load_models(current_models)
-DISPERSION_NAME_MAP = build_dispersion_name_map(MODELS)
+DISPERSION_NAME_MAP = build_dispersion_name_map()
 
 CALC_PATH = CALCS_ROOT / "conformers" / "OpenFF_Tors" / "outputs"
 OUT_PATH = APP_ROOT / "data" / "conformers" / "OpenFF_Tors"
@@ -135,6 +135,7 @@ def metrics(get_mae: dict[str, float]) -> dict[str, dict]:
     }
 
 
+@pytest.mark.framework("mace-polar-1")
 def test_openff_tors(metrics: dict[str, dict]) -> None:
     """
     Run OpenFF-Tors test.

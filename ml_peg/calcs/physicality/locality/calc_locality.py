@@ -163,6 +163,8 @@ def prepared_solute() -> dict[str, Atoms]:
     return solutes
 
 
+@pytest.mark.framework("mace-multihead")
+@pytest.mark.fast
 @pytest.mark.parametrize("model_name", MODELS)
 def test_ghost_atoms(prepared_solute: dict[str, Atoms], model_name: str) -> None:
     """
@@ -195,6 +197,8 @@ def test_ghost_atoms(prepared_solute: dict[str, Atoms], model_name: str) -> None
     write(write_dir / "system_ghost.xyz", [solute, system_ghost])
 
 
+@pytest.mark.framework("mace-multihead")
+@pytest.mark.fast
 @pytest.mark.parametrize("model_name", MODELS)
 def test_rand_h(prepared_solute: dict[str, Atoms], model_name: str) -> None:
     """

@@ -31,10 +31,10 @@ of structures. Models receive a score of 0, 0.5, or 1, based on whether the pred
 lowest and highest energy pairs match the reference predictions, and this is averaged
 for all 157 combinations.
 
-Computational cost
+Benchmark speed
 ------------------
 
-Low: tests are likely to take a couple of minutes to run on CPU.
+Fast: tests are likely to take a couple of minutes to run on CPU.
 
 Data availability
 -----------------
@@ -73,10 +73,10 @@ energy is calculated by taking the difference between the energy of the surface 
 molecule and the sum of individual surface and molecule energies. This is compared to
 the reference adsorption energy, calculated in the same way.
 
-Computational cost
+Benchmark speed
 ------------------
 
-Very low: tests are likely to take less than a minute to run on CPU.
+Fast: tests are likely to take less than a minute to run on CPU.
 
 Data availability
 -----------------
@@ -119,10 +119,10 @@ MAE of adsorption energies
 For each adsorbate-surface reaction, the adsorption energy is calculated as the difference between the energy of the surface + molecule and the sum of individual surface and molecule energies. This is compared to the PBE reference
 adsorption energy from the CMR database.
 
-Computational cost
+Benchmark speed
 ------------------
 
-Low: tests are likely to take a couple of minutes to run on CPU.
+Fast: tests are likely to take a couple of minutes to run on CPU.
 
 Data availability
 -----------------
@@ -160,10 +160,10 @@ an oxygen placed on-top of the site furthest along the slab's normal
 direction. The distance between the oxygen and the site is that which
 minimizes the energy according to MACE-MatPES-r2SCAN.
 
-Computational cost
+Benchmark speed
 ------------------
 
-Very low: tests are likely to take less than a minute to run on CPU.
+Fast: tests are likely to take less than a minute to run on CPU.
 
 Data availability
 -----------------
@@ -205,11 +205,10 @@ One is of the clean surface with the adsorbate in the gas phase far from the sur
 the second is of the transition state structure with the adsorbate at the surface
 (minimum barrier geometry to dissociation and chemisorption).
 
-
-Computational cost
+Benchmark speed
 ------------------
 
-Very low: tests are likely to take less than a minute to run on CPU.
+Fast: tests are likely to take less than a minute to run on CPU.
 
 Data availability
 -----------------
@@ -251,10 +250,10 @@ effective binding energy and binding length (i.e. minimum of adsorption energy c
 each strain condition. This is compared to the reference binding energy & length,
 calculated in the same way.
 
-Computational cost
+Benchmark speed
 ------------------
 
-Very low: tests are likely to take less than a minute to run on CPU.
+Fast: tests are likely to take less than a minute to run on CPU.
 
 Data availability
 -----------------
@@ -269,3 +268,99 @@ Reference data:
 
 * Same as input data
 * PBE (with D3 dispersion correction), FHI-aims "intermediate" settings
+
+
+Cleavage Energy
+===============
+
+Summary
+-------
+
+Performance in predicting cleavage energies for 36,718 surface configurations
+across a wide range of materials and Miller indices.
+
+Metrics
+-------
+
+1. Cleavage energy MAE
+
+Accuracy of cleavage energy predictions compared to DFT reference values.
+
+For each surface, the cleavage energy is calculated as
+``(E_slab - thickness_ratio * E_bulk) / (2 * A)``, where ``E_slab`` and
+``E_bulk`` are single-point energies of the slab and the lattice-matched bulk
+unit cell, ``thickness_ratio`` is the number of bulk unit cells in the slab
+thickness, and ``A`` is the surface area. Results are reported in meV/A^2.
+The mean absolute error is computed over all 36,718 surfaces.
+
+2. Cleavage energy RMSE
+
+Root mean squared error of cleavage energy predictions across all surfaces.
+
+Benchmark speed
+------------------
+
+Medium: benchmark involves only single-point calculations, but for 36,718 slab-bulk pairs. Takes roughly 5-20 minutes on GPU or a few hours on CPUs.
+
+Data availability
+-----------------
+
+Input data:
+
+* Surface configurations were obtained from the Materials Project, covering
+  3,699 unique bulk materials with multiple Miller indices and terminations
+  per material. The original unfiltered data source is available at
+  Zenodo (DOI: 10.5281/zenodo.10381505).
+
+Reference data:
+
+* DFT cleavage energies calculated using PBE functional.
+
+Publication:
+
+* A. Mehdizadeh and P. Schindler, "Surface stability modeling with universal
+  machine learning interatomic potentials: a comprehensive cleavage energy
+  benchmarking study," Mach. Learn.: Sci. Technol., 2025.
+  https://iopscience.iop.org/article/10.1088/3050-287X/ae1408
+
+
+Metal Surface Reconstructions
+=============================
+
+Summary
+-------
+
+Performance in the predicting surface energy and representing the surface reconstruction.
+
+Metrics
+-------
+
+For each slab, a geometry optimization (F_max = 0.05 eV/Å) is performed, where the bottom most layer is fixed. After that three metrics are evaluated:
+
+* Surface energy error (the surface energy is calculated with regard to the bulk and gas phase references)
+
+* Displacement with regard to the reference configuration
+
+* Energetic ranking (using the surface energy)
+
+Benchmark speed
+------------------
+
+Medium: tests are likely to take half an hour.
+
+Data availability
+-----------------
+
+Input data:
+
+* Stable and metastable Cu(111)O surface reconstructions.
+
+  * Zhu, B., Huang, Y., Lv, J., Huang, W., Lian, Z., Ouyang, R.,  Yang, F. "Dynamic Evolution and Transformation of Copper Oxides on Cu (111)." The Journal of Physical Chemistry C, 2025, 129(29), 13497-13504. https://doi.org/10.1021/acs.jpcc.5c03416
+
+* Stable and metastable Pd/Au reconstructions with C, O and N atoms.
+
+  * Vinogradova, O. V., Reuter, K., Bukas, V. J. "Trends of Pd3Au (111) alloy surface segregation in oxygen, carbon, and nitrogen environments." The Journal of Physical Chemistry C, 2023, 127(45), 22060-22066. https://doi.org/10.1021/acs.jpcc.3c05640
+
+Reference data:
+
+* PBE conjugate gradient geomerty optimizations are performed via VASP, with a cutoff energy of 500 eV.
